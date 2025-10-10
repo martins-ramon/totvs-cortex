@@ -663,12 +663,15 @@ def chat():
         
         question_embedding = get_embedding(user_question)
         
+        # Converter embedding para formato PostgreSQL vector
+        embedding_str = '[' + ','.join(map(str, question_embedding)) + ']'
+        
         result = db.execute(
             text("""
                 SELECT f.id, f.feedback_to_user, f.feedback_to_manager, 
                        f.expectations_company, f.expectations_manager, 
                        f.feedback_date, f.created_at, u.name,
-                       (1 - (f.embedding <=> :question_embedding::vector)) as similarity
+                       (1 - (f.embedding <=> CAST(:question_embedding AS vector))) as similarity
                 FROM feedbacks f
                 JOIN users u ON f.user_id = u.id
                 WHERE f.author_id = :author_id
@@ -676,7 +679,7 @@ def chat():
                 LIMIT 5
             """),
             {
-                "question_embedding": str(question_embedding),
+                "question_embedding": embedding_str,
                 "author_id": session['user_id']
             }
         )

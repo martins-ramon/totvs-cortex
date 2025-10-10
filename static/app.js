@@ -265,7 +265,7 @@ async function showDashboard() {
                                 </div>
                             </div>
                             <div class="feedback-date">
-                                ${new Date(feedback.feedback_date || feedback.created_at).toLocaleDateString('pt-BR')}
+                                ${new Date((feedback.feedback_date || feedback.created_at).replace(/-/g, '/')).toLocaleDateString('pt-BR')}
                             </div>
                         </div>
                         
@@ -823,7 +823,7 @@ async function loadUserLastFeedback() {
         
         if (data.feedbacks && data.feedbacks.length > 0) {
             const lastFeedback = data.feedbacks[0];
-            const feedbackDate = new Date(lastFeedback.feedback_date).toLocaleDateString('pt-BR');
+            const feedbackDate = new Date(lastFeedback.feedback_date.replace(/-/g, '/')).toLocaleDateString('pt-BR');
             document.getElementById('last-feedback-date').textContent = feedbackDate;
             document.getElementById('last-feedback-info').style.display = 'block';
         } else {
@@ -858,7 +858,7 @@ async function showFeedbackHistory() {
                 ${data.feedbacks.map(fb => `
                     <div class="feedback-history-item" style="border: 1px solid #E2E8F0; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                            <strong>${new Date(fb.feedback_date).toLocaleDateString('pt-BR')}</strong>
+                            <strong>${new Date(fb.feedback_date.replace(/-/g, '/')).toLocaleDateString('pt-BR')}</strong>
                             <button onclick="editFeedback(${fb.id})" class="btn-link">Editar</button>
                         </div>
                         <div style="font-size: 0.875rem; color: #64748B;">
