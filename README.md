@@ -63,6 +63,11 @@ Interface inspirada em Lattice e 15Five com:
 
 ## 🔒 Segurança
 
-- Senhas hash com SHA-256
-- Sessões seguras com Flask
-- Variáveis de ambiente para credenciais
+- **Senhas seguras com PBKDF2**: Hashing moderno usando werkzeug.security com salt automático
+- **Sessões seguras**: Flask sessions com secret key
+- **Variáveis de ambiente**: Credenciais protegidas em secrets
+- **Proteção CORS**: Configurado para segurança de APIs
+
+### ⚠️ Importante: Usuários Existentes
+
+Após a atualização de segurança, usuários que já tinham conta precisarão se **registrar novamente** (o sistema anterior usava hash inseguro).

@@ -6,7 +6,7 @@ from flask_cors import CORS
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from openai import OpenAI
-import hashlib
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret-key-change-in-production')
@@ -76,7 +76,7 @@ def init_db():
         conn.commit()
 
 def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+    return generate_password_hash(password)
 
 def get_embedding(text):
     response = openai_client.embeddings.create(
@@ -161,15 +161,12 @@ def login():
     
     try:
         result = db.execute(
-            text("SELECT id, name, company_name FROM managers WHERE email = :email AND password_hash = :password_hash"),
-            {
-                "email": data['email'],
-                "password_hash": hash_password(data['password'])
-            }
+            text("SELECT id, name, company_name, password_hash FROM managers WHERE email = :email"),
+            {"email": data['email']}
         )
         manager = result.fetchone()
         
-        if manager:
+        if manager and check_password_hash(manager[3], data['password']):
             session['manager_id'] = manager[0]
             return jsonify({
                 "success": True,
