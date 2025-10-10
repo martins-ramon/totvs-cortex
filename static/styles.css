@@ -635,6 +635,43 @@ body {
     margin-bottom: 0.5rem;
 }
 
+/* Photo Upload Styles */
+.photo-upload-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.photo-preview {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 3px solid #6366F1;
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+}
+
+.user-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #E2E8F0;
+}
+
+.user-avatar-placeholder {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366F1, #4F46E5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: 600;
+    font-size: 1.25rem;
+}
+
 /* Chatbot Styles */
 .chat-widget {
     position: fixed;

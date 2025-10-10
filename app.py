@@ -481,6 +481,76 @@ def dashboard():
     finally:
         db.close()
 
+@app.route('/api/profile/photo', methods=['POST', 'GET'])
+def profile_photo():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    db = SessionLocal()
+    
+    try:
+        if request.method == 'POST':
+            import base64
+            data = request.json
+            photo_data = data.get('photo')
+            
+            if not photo_data:
+                return jsonify({"error": "No photo provided"}), 400
+            
+            if photo_data.startswith('data:image'):
+                photo_data = photo_data.split(',')[1]
+            
+            photo_bytes = base64.b64decode(photo_data)
+            
+            db.execute(
+                text("UPDATE users SET profile_photo = :photo WHERE id = :user_id"),
+                {"photo": photo_bytes, "user_id": session['user_id']}
+            )
+            db.commit()
+            
+            return jsonify({"success": True})
+        else:
+            result = db.execute(
+                text("SELECT profile_photo FROM users WHERE id = :user_id"),
+                {"user_id": session['user_id']}
+            )
+            row = result.fetchone()
+            
+            if row and row[0]:
+                import base64
+                photo_base64 = base64.b64encode(row[0]).decode('utf-8')
+                return jsonify({"photo": f"data:image/jpeg;base64,{photo_base64}"})
+            else:
+                return jsonify({"photo": None})
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
+@app.route('/api/user/<int:user_id>/photo', methods=['GET'])
+def user_photo(user_id):
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    db = SessionLocal()
+    
+    try:
+        result = db.execute(
+            text("SELECT profile_photo FROM users WHERE id = :user_id"),
+            {"user_id": user_id}
+        )
+        row = result.fetchone()
+        
+        if row and row[0]:
+            import base64
+            photo_base64 = base64.b64encode(row[0]).decode('utf-8')
+            return jsonify({"photo": f"data:image/jpeg;base64,{photo_base64}"})
+        else:
+            return jsonify({"photo": None})
+    finally:
+        db.close()
+
 @app.route('/api/chat', methods=['POST'])
 def chat():
     if 'user_id' not in session:

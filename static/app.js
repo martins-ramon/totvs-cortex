@@ -653,6 +653,43 @@ async function showAccount() {
     
     const managerSelect = document.getElementById('account-manager');
     managerSelect.value = currentUser.manager_id || '';
+    
+    await loadUserPhoto();
+}
+
+async function loadUserPhoto() {
+    try {
+        const response = await fetch('/api/profile/photo', {
+            credentials: 'include'
+        });
+        const data = await response.json();
+        
+        if (data.photo) {
+            const preview = document.getElementById('photo-preview');
+            preview.src = data.photo;
+            preview.style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Failed to load photo:', error);
+    }
+}
+
+function previewPhoto(event) {
+    const file = event.target.files[0];
+    if (file) {
+        if (file.size > 2 * 1024 * 1024) {
+            showToast('Foto muito grande. Máximo 2MB', 'warning');
+            return;
+        }
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const preview = document.getElementById('photo-preview');
+            preview.src = e.target.result;
+            preview.style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+    }
 }
 
 async function loadAvailableManagers() {
@@ -700,8 +737,29 @@ async function updateProfile() {
         const data = await response.json();
         
         if (data.success) {
-            showToast('Perfil atualizado com sucesso!', 'success');
-            await checkAuth();
+            const photoInput = document.getElementById('photo-input');
+            if (photoInput.files.length > 0) {
+                const reader = new FileReader();
+                reader.onload = async function(e) {
+                    try {
+                        await fetch('/api/profile/photo', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'include',
+                            body: JSON.stringify({ photo: e.target.result })
+                        });
+                        showToast('Perfil e foto atualizados com sucesso!', 'success');
+                        await checkAuth();
+                    } catch (error) {
+                        console.error('Failed to update photo:', error);
+                        showToast('Perfil atualizado, mas erro ao salvar foto', 'warning');
+                    }
+                };
+                reader.readAsDataURL(photoInput.files[0]);
+            } else {
+                showToast('Perfil atualizado com sucesso!', 'success');
+                await checkAuth();
+            }
         } else {
             showToast('Erro ao atualizar perfil', 'error');
         }
