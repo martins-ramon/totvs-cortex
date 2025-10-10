@@ -329,13 +329,21 @@ def feedbacks():
         if request.method == 'POST':
             data = request.json
             
-            feedback_parts = [data['feedback_to_user']]
+            from datetime import datetime
+            feedback_date_obj = datetime.strptime(data['feedback_date'], '%Y-%m-%d')
+            date_formatted = feedback_date_obj.strftime('%d/%m/%Y')
+            
+            temporal_context = f"No feedback realizado no dia {date_formatted} foram discutidos os seguintes pontos: "
+            
+            feedback_parts = [temporal_context]
+            feedback_parts.append(f"Feedback ao usuário: {data['feedback_to_user']}")
+            
             if data.get('feedback_to_manager'):
-                feedback_parts.append(data['feedback_to_manager'])
+                feedback_parts.append(f"Feedback ao gestor: {data['feedback_to_manager']}")
             if data.get('expectations_company'):
-                feedback_parts.append(data['expectations_company'])
+                feedback_parts.append(f"Expectativas sobre a empresa: {data['expectations_company']}")
             if data.get('expectations_manager'):
-                feedback_parts.append(data['expectations_manager'])
+                feedback_parts.append(f"Expectativas sobre o gestor: {data['expectations_manager']}")
             
             combined_text = " ".join(feedback_parts)
             embedding = get_embedding(combined_text)
