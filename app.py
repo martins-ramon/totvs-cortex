@@ -54,7 +54,7 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
                 author_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                feedback_to_employee TEXT NOT NULL,
+                feedback_to_user TEXT NOT NULL,
                 feedback_to_manager TEXT,
                 expectations_company TEXT,
                 expectations_manager TEXT,
@@ -94,7 +94,7 @@ def get_embedding(text):
 def generate_insights(employee_name, latest_feedback, all_feedbacks):
     feedback_history = "\n\n".join([
         f"Feedback {i+1} ({fb['created_at']}):\n"
-        f"Ao Funcionário: {fb['feedback_to_employee']}\n"
+        f"Ao Usuário: {fb['feedback_to_user']}\n"
         f"Ao Gestor: {fb['feedback_to_manager'] or 'Não informado'}\n"
         f"Expectativas (Empresa): {fb['expectations_company'] or 'Não informado'}\n"
         f"Expectativas (Gestor): {fb['expectations_manager'] or 'Não informado'}"
@@ -104,7 +104,7 @@ def generate_insights(employee_name, latest_feedback, all_feedbacks):
     prompt = f"""Analise os dados de feedback de {employee_name} e gere insights concisos em formato JSON, em PORTUGUÊS BRASILEIRO.
 
 Último Feedback:
-- Ao Funcionário: {latest_feedback['feedback_to_employee']}
+- Ao Usuário: {latest_feedback['feedback_to_user']}
 - Ao Gestor: {latest_feedback['feedback_to_manager'] or 'Não informado'}
 - Expectativas (Empresa): {latest_feedback['expectations_company'] or 'Não informado'}
 - Expectativas (Gestor): {latest_feedback['expectations_manager'] or 'Não informado'}
@@ -329,7 +329,7 @@ def feedbacks():
         if request.method == 'POST':
             data = request.json
             
-            feedback_parts = [data['feedback_to_employee']]
+            feedback_parts = [data['feedback_to_user']]
             if data.get('feedback_to_manager'):
                 feedback_parts.append(data['feedback_to_manager'])
             if data.get('expectations_company'):
@@ -343,14 +343,14 @@ def feedbacks():
             result = db.execute(
                 text("""
                     INSERT INTO feedbacks 
-                    (user_id, author_id, feedback_to_employee, feedback_to_manager, expectations_company, expectations_manager, feedback_date, embedding) 
-                    VALUES (:user_id, :author_id, :feedback_to_employee, :feedback_to_manager, :expectations_company, :expectations_manager, :feedback_date, :embedding) 
+                    (user_id, author_id, feedback_to_user, feedback_to_manager, expectations_company, expectations_manager, feedback_date, embedding) 
+                    VALUES (:user_id, :author_id, :feedback_to_user, :feedback_to_manager, :expectations_company, :expectations_manager, :feedback_date, :embedding) 
                     RETURNING id
                 """),
                 {
                     "user_id": data['user_id'],
                     "author_id": session['user_id'],
-                    "feedback_to_employee": data['feedback_to_employee'],
+                    "feedback_to_user": data['feedback_to_user'],
                     "feedback_to_manager": data.get('feedback_to_manager', ''),
                     "expectations_company": data.get('expectations_company', ''),
                     "expectations_manager": data.get('expectations_manager', ''),
@@ -365,7 +365,7 @@ def feedbacks():
         else:
             result = db.execute(
                 text("""
-                    SELECT f.id, f.user_id, u.name, f.feedback_to_employee, f.feedback_to_manager, 
+                    SELECT f.id, f.user_id, u.name, f.feedback_to_user, f.feedback_to_manager, 
                            f.expectations_company, f.expectations_manager, f.feedback_date, f.created_at
                     FROM feedbacks f
                     JOIN users u ON f.user_id = u.id
@@ -379,7 +379,7 @@ def feedbacks():
                     "id": row[0],
                     "user_id": row[1],
                     "user_name": row[2],
-                    "feedback_to_employee": row[3],
+                    "feedback_to_user": row[3],
                     "feedback_to_manager": row[4],
                     "expectations_company": row[5],
                     "expectations_manager": row[6],
@@ -403,7 +403,7 @@ def dashboard():
         result = db.execute(
             text("""
                 SELECT u.id, u.name, u.company, u.phone,
-                       f.feedback_to_employee, f.feedback_to_manager, 
+                       f.feedback_to_user, f.feedback_to_manager, 
                        f.expectations_company, f.expectations_manager, f.feedback_date, f.created_at
                 FROM users u
                 LEFT JOIN LATERAL (
@@ -432,7 +432,7 @@ def dashboard():
             
             if row[4]:
                 latest_feedback = {
-                    "feedback_to_employee": row[4],
+                    "feedback_to_user": row[4],
                     "feedback_to_manager": row[5],
                     "expectations_company": row[6],
                     "expectations_manager": row[7],
@@ -443,7 +443,7 @@ def dashboard():
                 
                 all_feedbacks_result = db.execute(
                     text("""
-                        SELECT feedback_to_employee, feedback_to_manager, 
+                        SELECT feedback_to_user, feedback_to_manager, 
                                expectations_company, expectations_manager, feedback_date, created_at
                         FROM feedbacks
                         WHERE user_id = :user_id
@@ -454,7 +454,7 @@ def dashboard():
                 
                 all_feedbacks = [
                     {
-                        "feedback_to_employee": fb[0],
+                        "feedback_to_user": fb[0],
                         "feedback_to_manager": fb[1],
                         "expectations_company": fb[2],
                         "expectations_manager": fb[3],

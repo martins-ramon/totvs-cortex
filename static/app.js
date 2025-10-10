@@ -559,12 +559,12 @@ async function deleteEmployee(id) {
 async function submitFeedback() {
     const user_id = document.getElementById('feedback-user').value;
     const feedback_date = document.getElementById('feedback-date').value;
-    const feedback_to_employee = document.getElementById('feedback-to-employee').value;
+    const feedback_to_user = document.getElementById('feedback-to-employee').value;
     const feedback_to_manager = document.getElementById('feedback-to-manager').value;
     const expectations_company = document.getElementById('expectations-company').value;
     const expectations_manager = document.getElementById('expectations-manager').value;
     
-    if (!user_id || !feedback_date || !feedback_to_employee) {
+    if (!user_id || !feedback_date || !feedback_to_user) {
         showToast('Preencha os campos obrigatórios (usuário, data e feedback)', 'warning');
         return;
     }
@@ -581,7 +581,7 @@ async function submitFeedback() {
             body: JSON.stringify({
                 user_id: parseInt(user_id),
                 feedback_date,
-                feedback_to_employee,
+                feedback_to_user,
                 feedback_to_manager,
                 expectations_company,
                 expectations_manager
