@@ -804,6 +804,167 @@ function toggleChat() {
     }
 }
 
+let selectedUserForFeedback = null;
+
+async function loadUserLastFeedback() {
+    const userId = document.getElementById('feedback-user').value;
+    selectedUserForFeedback = userId;
+    
+    if (!userId) {
+        document.getElementById('last-feedback-info').style.display = 'none';
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/user/${userId}/feedbacks`, {
+            credentials: 'include'
+        });
+        const data = await response.json();
+        
+        if (data.feedbacks && data.feedbacks.length > 0) {
+            const lastFeedback = data.feedbacks[0];
+            const feedbackDate = new Date(lastFeedback.feedback_date).toLocaleDateString('pt-BR');
+            document.getElementById('last-feedback-date').textContent = feedbackDate;
+            document.getElementById('last-feedback-info').style.display = 'block';
+        } else {
+            document.getElementById('last-feedback-info').style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Failed to load last feedback:', error);
+    }
+}
+
+async function showFeedbackHistory() {
+    if (!selectedUserForFeedback) return;
+    
+    try {
+        const response = await fetch(`/api/user/${selectedUserForFeedback}/feedbacks`, {
+            credentials: 'include'
+        });
+        const data = await response.json();
+        
+        if (!data.feedbacks || data.feedbacks.length === 0) {
+            showToast('Nenhum feedback anterior encontrado', 'info');
+            return;
+        }
+        
+        const userSelect = document.getElementById('feedback-user');
+        const userName = userSelect.options[userSelect.selectedIndex].text.split(' (')[0];
+        
+        const modalBody = document.getElementById('modal-body');
+        modalBody.innerHTML = `
+            <h3>Histórico de Feedbacks - ${userName}</h3>
+            <div style="max-height: 500px; overflow-y: auto; margin-top: 1rem;">
+                ${data.feedbacks.map(fb => `
+                    <div class="feedback-history-item" style="border: 1px solid #E2E8F0; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <strong>${new Date(fb.feedback_date).toLocaleDateString('pt-BR')}</strong>
+                            <button onclick="editFeedback(${fb.id})" class="btn-link">Editar</button>
+                        </div>
+                        <div style="font-size: 0.875rem; color: #64748B;">
+                            <p><strong>Ao usuário:</strong> ${fb.feedback_to_user}</p>
+                            ${fb.feedback_to_manager ? `<p><strong>Ao gestor:</strong> ${fb.feedback_to_manager}</p>` : ''}
+                            ${fb.expectations_company ? `<p><strong>Expectativas (Empresa):</strong> ${fb.expectations_company}</p>` : ''}
+                            ${fb.expectations_manager ? `<p><strong>Expectativas (Gestor):</strong> ${fb.expectations_manager}</p>` : ''}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+        
+        document.getElementById('modal').style.display = 'flex';
+    } catch (error) {
+        console.error('Failed to load feedback history:', error);
+        showToast('Erro ao carregar histórico', 'error');
+    }
+}
+
+async function editFeedback(feedbackId) {
+    try {
+        const response = await fetch(`/api/user/${selectedUserForFeedback}/feedbacks`, {
+            credentials: 'include'
+        });
+        const data = await response.json();
+        
+        const feedback = data.feedbacks.find(f => f.id === feedbackId);
+        if (!feedback) return;
+        
+        closeModal();
+        
+        document.getElementById('feedback-to-employee').value = feedback.feedback_to_user;
+        document.getElementById('feedback-to-manager').value = feedback.feedback_to_manager || '';
+        document.getElementById('expectations-company').value = feedback.expectations_company || '';
+        document.getElementById('expectations-manager').value = feedback.expectations_manager || '';
+        document.getElementById('feedback-date').value = feedback.feedback_date;
+        
+        const submitButton = document.querySelector('#feedbacks-view button.btn-primary');
+        submitButton.textContent = 'Atualizar Feedback';
+        submitButton.onclick = async function() {
+            await updateFeedbackSubmit(feedbackId);
+        };
+        
+        showToast('Feedback carregado para edição', 'info');
+    } catch (error) {
+        console.error('Failed to edit feedback:', error);
+        showToast('Erro ao carregar feedback', 'error');
+    }
+}
+
+async function updateFeedbackSubmit(feedbackId) {
+    const feedback_to_user = document.getElementById('feedback-to-employee').value;
+    const feedback_to_manager = document.getElementById('feedback-to-manager').value;
+    const expectations_company = document.getElementById('expectations-company').value;
+    const expectations_manager = document.getElementById('expectations-manager').value;
+    const feedback_date = document.getElementById('feedback-date').value;
+    
+    if (!feedback_date || !feedback_to_user) {
+        showToast('Data e feedback ao usuário são obrigatórios', 'warning');
+        return;
+    }
+    
+    const button = event.target;
+    button.disabled = true;
+    button.textContent = 'Atualizando...';
+    
+    try {
+        const response = await fetch(`/api/feedbacks/${feedbackId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                feedback_to_user,
+                feedback_to_manager,
+                expectations_company,
+                expectations_manager,
+                feedback_date
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast('Feedback atualizado com sucesso!', 'success');
+            
+            document.getElementById('feedback-to-employee').value = '';
+            document.getElementById('feedback-to-manager').value = '';
+            document.getElementById('expectations-company').value = '';
+            document.getElementById('expectations-manager').value = '';
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('feedback-date').value = today;
+            
+            button.textContent = 'Salvar Feedback com IA';
+            button.onclick = submitFeedback;
+        } else {
+            showToast('Erro ao atualizar feedback', 'error');
+        }
+    } catch (error) {
+        console.error('Failed to update feedback:', error);
+        showToast('Erro ao atualizar feedback', 'error');
+    } finally {
+        button.disabled = false;
+    }
+}
+
 async function loadUserAvatarAsync(userId) {
     try {
         const response = await fetch(`/api/user/${userId}/photo`, {

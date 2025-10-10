@@ -318,6 +318,66 @@ def update_profile():
     finally:
         db.close()
 
+@app.route('/api/feedbacks/<int:feedback_id>', methods=['PUT'])
+def update_feedback(feedback_id):
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    db = SessionLocal()
+    
+    try:
+        data = request.json
+        
+        from datetime import datetime
+        feedback_date_obj = datetime.strptime(data['feedback_date'], '%Y-%m-%d')
+        date_formatted = feedback_date_obj.strftime('%d/%m/%Y')
+        
+        temporal_context = f"No feedback realizado no dia {date_formatted} foram discutidos os seguintes pontos: "
+        
+        feedback_parts = [temporal_context]
+        feedback_parts.append(f"Feedback ao usuário: {data['feedback_to_user']}")
+        
+        if data.get('feedback_to_manager'):
+            feedback_parts.append(f"Feedback ao gestor: {data['feedback_to_manager']}")
+        if data.get('expectations_company'):
+            feedback_parts.append(f"Expectativas sobre a empresa: {data['expectations_company']}")
+        if data.get('expectations_manager'):
+            feedback_parts.append(f"Expectativas sobre o gestor: {data['expectations_manager']}")
+        
+        combined_text = " ".join(feedback_parts)
+        embedding = get_embedding(combined_text)
+        
+        db.execute(
+            text("""
+                UPDATE feedbacks 
+                SET feedback_to_user = :feedback_to_user,
+                    feedback_to_manager = :feedback_to_manager,
+                    expectations_company = :expectations_company,
+                    expectations_manager = :expectations_manager,
+                    feedback_date = :feedback_date,
+                    embedding = :embedding
+                WHERE id = :feedback_id AND author_id = :author_id
+            """),
+            {
+                "feedback_id": feedback_id,
+                "author_id": session['user_id'],
+                "feedback_to_user": data['feedback_to_user'],
+                "feedback_to_manager": data.get('feedback_to_manager', ''),
+                "expectations_company": data.get('expectations_company', ''),
+                "expectations_manager": data.get('expectations_manager', ''),
+                "feedback_date": data['feedback_date'],
+                "embedding": str(embedding)
+            }
+        )
+        db.commit()
+        
+        return jsonify({"success": True})
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
 @app.route('/api/feedbacks', methods=['GET', 'POST'])
 def feedbacks():
     if 'user_id' not in session:
@@ -478,6 +538,42 @@ def dashboard():
             dashboard_data.append(user_data)
         
         return jsonify({"dashboard": dashboard_data})
+    finally:
+        db.close()
+
+@app.route('/api/user/<int:user_id>/feedbacks', methods=['GET'])
+def user_feedbacks(user_id):
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    db = SessionLocal()
+    
+    try:
+        result = db.execute(
+            text("""
+                SELECT f.id, f.feedback_to_user, f.feedback_to_manager, 
+                       f.expectations_company, f.expectations_manager, f.feedback_date, f.created_at
+                FROM feedbacks f
+                WHERE f.user_id = :user_id AND f.author_id = :author_id
+                ORDER BY f.feedback_date DESC, f.created_at DESC
+            """),
+            {"user_id": user_id, "author_id": session['user_id']}
+        )
+        
+        feedbacks = [
+            {
+                "id": row[0],
+                "feedback_to_user": row[1],
+                "feedback_to_manager": row[2],
+                "expectations_company": row[3],
+                "expectations_manager": row[4],
+                "feedback_date": row[5].isoformat() if row[5] else None,
+                "created_at": row[6].isoformat() if row[6] else None
+            }
+            for row in result.fetchall()
+        ]
+        
+        return jsonify({"feedbacks": feedbacks})
     finally:
         db.close()
 

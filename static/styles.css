@@ -635,6 +635,23 @@ body {
     margin-bottom: 0.5rem;
 }
 
+/* Link Button */
+.btn-link {
+    background: none;
+    border: none;
+    color: #6366F1;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    transition: color 0.3s ease;
+}
+
+.btn-link:hover {
+    color: #4F46E5;
+}
+
 /* Photo Upload Styles */
 .photo-upload-container {
     display: flex;

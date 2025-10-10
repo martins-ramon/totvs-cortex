@@ -76,9 +76,13 @@
                     <div class="feedback-form-container">
                         <div class="form-group">
                             <label>Selecionar Usuário *</label>
-                            <select id="feedback-user" class="form-control" required>
+                            <select id="feedback-user" class="form-control" required onchange="loadUserLastFeedback()">
                                 <option value="">Selecione...</option>
                             </select>
+                            <div id="last-feedback-info" class="last-feedback-info" style="display: none; margin-top: 0.5rem;">
+                                <small style="color: #64748B;">Último feedback: <span id="last-feedback-date"></span></small>
+                                <button onclick="showFeedbackHistory()" class="btn-link" style="margin-left: 1rem;">Ver histórico</button>
+                            </div>
                         </div>
                         
                         <div class="form-group">
