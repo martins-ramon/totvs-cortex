@@ -1,5 +1,41 @@
 let currentUser = null;
 
+function showToast(message, type = 'info', title = null) {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    
+    const icons = {
+        success: '✓',
+        error: '✕',
+        warning: '⚠',
+        info: 'ℹ'
+    };
+    
+    const titles = {
+        success: title || 'Sucesso',
+        error: title || 'Erro',
+        warning: title || 'Atenção',
+        info: title || 'Informação'
+    };
+    
+    toast.innerHTML = `
+        <div class="toast-icon">${icons[type] || icons.info}</div>
+        <div class="toast-content">
+            <div class="toast-title">${titles[type]}</div>
+            <div class="toast-message">${message}</div>
+        </div>
+        <div class="toast-close" onclick="this.parentElement.remove()">×</div>
+    `;
+    
+    container.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.animation = 'slideInRight 0.3s ease reverse';
+        setTimeout(() => toast.remove(), 300);
+    }, 5000);
+}
+
 async function checkAuth() {
     try {
         const response = await fetch('/api/current-user', {
@@ -51,7 +87,7 @@ async function login() {
     const password = document.getElementById('login-password').value;
     
     if (!email || !password) {
-        alert('Por favor, preencha todos os campos');
+        showToast('Preencha todos os campos', 'warning');
         return;
     }
     
@@ -68,12 +104,13 @@ async function login() {
         if (data.success) {
             currentUser = data.manager;
             showApp();
+            showToast('Login realizado com sucesso!', 'success');
         } else {
-            alert('Credenciais inválidas');
+            showToast('Credenciais inválidas', 'error');
         }
     } catch (error) {
         console.error('Login failed:', error);
-        alert('Erro ao fazer login');
+        showToast('Erro ao fazer login', 'error');
     }
 }
 
@@ -84,7 +121,7 @@ async function register() {
     const password = document.getElementById('register-password').value;
     
     if (!name || !company_name || !email || !password) {
-        alert('Por favor, preencha todos os campos');
+        showToast('Preencha todos os campos', 'warning');
         return;
     }
     
@@ -99,14 +136,14 @@ async function register() {
         const data = await response.json();
         
         if (data.success) {
-            alert('Conta criada com sucesso!');
+            showToast('Conta criada com sucesso!', 'success');
             await checkAuth();
         } else {
-            alert('Erro ao criar conta: ' + data.error);
+            showToast('Erro ao criar conta: ' + data.error, 'error');
         }
     } catch (error) {
         console.error('Registration failed:', error);
-        alert('Erro ao registrar');
+        showToast('Erro ao registrar', 'error');
     }
 }
 
@@ -118,6 +155,7 @@ async function logout() {
         });
         currentUser = null;
         showAuth();
+        showToast('Logout realizado', 'info');
     } catch (error) {
         console.error('Logout failed:', error);
     }
@@ -144,6 +182,21 @@ function setActiveNav(viewName) {
     }
 }
 
+function toggleCard(cardId) {
+    const expanded = document.getElementById(`expanded-${cardId}`);
+    const btn = document.getElementById(`btn-${cardId}`);
+    
+    if (expanded.classList.contains('show')) {
+        expanded.classList.remove('show');
+        btn.classList.remove('expanded');
+        btn.innerHTML = 'Ver detalhes <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>';
+    } else {
+        expanded.classList.add('show');
+        btn.classList.add('expanded');
+        btn.innerHTML = 'Ocultar detalhes <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>';
+    }
+}
+
 async function showDashboard() {
     setActiveNav('dashboard');
     document.getElementById('dashboard-view').style.display = 'block';
@@ -159,7 +212,7 @@ async function showDashboard() {
         const data = await response.json();
         
         if (data.dashboard && data.dashboard.length > 0) {
-            content.innerHTML = data.dashboard.map(item => {
+            content.innerHTML = data.dashboard.map((item, index) => {
                 if (!item.latest_feedback) {
                     return `
                         <div class="insight-card">
@@ -178,6 +231,19 @@ async function showDashboard() {
                 
                 const insights = item.insights;
                 const feedback = item.latest_feedback;
+                const cardId = `card-${index}`;
+                
+                const riskLabels = {
+                    'baixo': 'Baixo',
+                    'medio': 'Médio',
+                    'alto': 'Alto',
+                    'low': 'Baixo',
+                    'medium': 'Médio',
+                    'high': 'Alto'
+                };
+                
+                const riskLevel = insights.risco_saida?.nivel || insights.turnover_risk?.level || 'baixo';
+                const riskReason = insights.risco_saida?.motivo || insights.turnover_risk?.reason || '';
                 
                 return `
                     <div class="insight-card">
@@ -187,44 +253,66 @@ async function showDashboard() {
                                 <p>${item.position || 'Sem cargo'} ${item.department ? '• ' + item.department : ''}</p>
                             </div>
                             <div class="feedback-date">
-                                ${new Date(feedback.created_at).toLocaleDateString('pt-BR')}
+                                ${new Date(feedback.feedback_date || feedback.created_at).toLocaleDateString('pt-BR')}
                             </div>
                         </div>
                         
-                        <div class="insight-section">
-                            <h4>💪 Fortalezas</h4>
-                            <ul class="insight-list">
-                                ${insights.strengths.map(s => `<li>${s}</li>`).join('')}
-                            </ul>
-                        </div>
-                        
-                        <div class="insight-section">
-                            <h4>📈 Pontos de Desenvolvimento</h4>
-                            <ul class="insight-list">
-                                ${insights.development_points.map(p => `<li>${p}</li>`).join('')}
-                            </ul>
-                        </div>
+                        ${insights.resumo ? `
+                            <div class="insight-section">
+                                <h4>📝 Resumo do Último Feedback</h4>
+                                <div class="feedback-summary">${insights.resumo}</div>
+                            </div>
+                        ` : ''}
                         
                         <div class="insight-section">
                             <h4>⚠️ Risco de Saída</h4>
                             <p>
-                                <span class="risk-badge risk-${insights.turnover_risk.level}">
-                                    ${insights.turnover_risk.level === 'low' ? 'Baixo' : insights.turnover_risk.level === 'medium' ? 'Médio' : 'Alto'}
+                                <span class="risk-badge risk-${riskLevel.toLowerCase().replace('é', 'e')}">
+                                    ${riskLabels[riskLevel.toLowerCase()] || riskLabels['baixo']}
                                 </span>
-                            </p>
-                            <p style="margin-top: 0.5rem; font-size: 0.875rem; color: #64748B;">
-                                ${insights.turnover_risk.reason}
                             </p>
                         </div>
                         
-                        ${insights.requires_attention.length > 0 ? `
+                        ${insights.acoes_pendencias && insights.acoes_pendencias.length > 0 ? `
                             <div class="insight-section">
-                                <h4>🎯 Requer Atenção</h4>
-                                ${insights.requires_attention.map(item => 
-                                    `<div class="attention-item">${item}</div>`
+                                <h4>🎯 Ações ou Pendências</h4>
+                                ${insights.acoes_pendencias.map(action => 
+                                    `<div class="action-badge">${action}</div>`
                                 ).join('')}
                             </div>
-                        ` : ''}
+                        ` : `
+                            <div class="insight-section">
+                                <h4>🎯 Ações ou Pendências</h4>
+                                <p style="color: #94A3B8; font-size: 0.875rem;">Sem pendências</p>
+                            </div>
+                        `}
+                        
+                        <div class="expand-btn" id="btn-${cardId}" onclick="toggleCard('${cardId}')">
+                            Ver detalhes <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+                        </div>
+                        
+                        <div class="card-expanded" id="expanded-${cardId}">
+                            <div class="insight-section">
+                                <h4>💪 Fortalezas</h4>
+                                <ul class="insight-list">
+                                    ${(insights.fortalezas || insights.strengths || []).map(s => `<li>${s}</li>`).join('')}
+                                </ul>
+                            </div>
+                            
+                            <div class="insight-section">
+                                <h4>📈 Pontos de Desenvolvimento</h4>
+                                <ul class="insight-list">
+                                    ${(insights.pontos_desenvolvimento || insights.development_points || []).map(p => `<li>${p}</li>`).join('')}
+                                </ul>
+                            </div>
+                            
+                            <div class="insight-section">
+                                <h4>💡 Detalhes do Risco</h4>
+                                <p style="font-size: 0.875rem; color: #64748B;">
+                                    ${riskReason}
+                                </p>
+                            </div>
+                        </div>
                     </div>
                 `;
             }).join('');
@@ -296,6 +384,9 @@ async function showFeedbacks() {
     setActiveNav('feedbacks');
     document.getElementById('feedbacks-view').style.display = 'block';
     
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('feedback-date').value = today;
+    
     await loadEmployeeSelect();
 }
 
@@ -349,7 +440,7 @@ async function saveNewEmployee() {
     const department = document.getElementById('new-emp-department').value;
     
     if (!name || !email) {
-        alert('Nome e email são obrigatórios');
+        showToast('Nome e email são obrigatórios', 'warning');
         return;
     }
     
@@ -366,12 +457,13 @@ async function saveNewEmployee() {
         if (data.success) {
             closeModal();
             showEmployees();
+            showToast('Funcionário adicionado com sucesso!', 'success');
         } else {
-            alert('Erro ao adicionar funcionário');
+            showToast('Erro ao adicionar funcionário', 'error');
         }
     } catch (error) {
         console.error('Failed to add employee:', error);
-        alert('Erro ao adicionar funcionário');
+        showToast('Erro ao adicionar funcionário', 'error');
     }
 }
 
@@ -429,19 +521,19 @@ async function saveEditEmployee(id) {
         if (data.success) {
             closeModal();
             showEmployees();
+            showToast('Funcionário atualizado com sucesso!', 'success');
         } else {
-            alert('Erro ao atualizar funcionário');
+            showToast('Erro ao atualizar funcionário', 'error');
         }
     } catch (error) {
         console.error('Failed to update employee:', error);
-        alert('Erro ao atualizar funcionário');
+        showToast('Erro ao atualizar funcionário', 'error');
     }
 }
 
 async function deleteEmployee(id) {
-    if (!confirm('Tem certeza que deseja excluir este funcionário? Todos os feedbacks relacionados também serão excluídos.')) {
-        return;
-    }
+    const confirmed = confirm('Tem certeza que deseja excluir este funcionário? Todos os feedbacks relacionados também serão excluídos.');
+    if (!confirmed) return;
     
     try {
         const response = await fetch(`/api/employees/${id}`, {
@@ -453,24 +545,26 @@ async function deleteEmployee(id) {
         
         if (data.success) {
             showEmployees();
+            showToast('Funcionário excluído', 'success');
         } else {
-            alert('Erro ao excluir funcionário');
+            showToast('Erro ao excluir funcionário', 'error');
         }
     } catch (error) {
         console.error('Failed to delete employee:', error);
-        alert('Erro ao excluir funcionário');
+        showToast('Erro ao excluir funcionário', 'error');
     }
 }
 
 async function submitFeedback() {
     const employee_id = document.getElementById('feedback-employee').value;
+    const feedback_date = document.getElementById('feedback-date').value;
     const feedback_to_employee = document.getElementById('feedback-to-employee').value;
     const feedback_to_manager = document.getElementById('feedback-to-manager').value;
     const expectations_company = document.getElementById('expectations-company').value;
     const expectations_manager = document.getElementById('expectations-manager').value;
     
-    if (!employee_id || !feedback_to_employee || !feedback_to_manager || !expectations_company || !expectations_manager) {
-        alert('Por favor, preencha todos os campos');
+    if (!employee_id || !feedback_date || !feedback_to_employee) {
+        showToast('Preencha os campos obrigatórios (funcionário, data e feedback ao funcionário)', 'warning');
         return;
     }
     
@@ -485,6 +579,7 @@ async function submitFeedback() {
             credentials: 'include',
             body: JSON.stringify({
                 employee_id: parseInt(employee_id),
+                feedback_date,
                 feedback_to_employee,
                 feedback_to_manager,
                 expectations_company,
@@ -495,19 +590,21 @@ async function submitFeedback() {
         const data = await response.json();
         
         if (data.success) {
-            alert('Feedback salvo e vetorizado com sucesso!');
+            showToast('Feedback salvo e vetorizado com sucesso!', 'success');
             
             document.getElementById('feedback-employee').value = '';
             document.getElementById('feedback-to-employee').value = '';
             document.getElementById('feedback-to-manager').value = '';
             document.getElementById('expectations-company').value = '';
             document.getElementById('expectations-manager').value = '';
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('feedback-date').value = today;
         } else {
-            alert('Erro ao salvar feedback');
+            showToast('Erro ao salvar feedback', 'error');
         }
     } catch (error) {
         console.error('Failed to submit feedback:', error);
-        alert('Erro ao salvar feedback');
+        showToast('Erro ao salvar feedback', 'error');
     } finally {
         button.disabled = false;
         button.textContent = 'Salvar Feedback com IA';

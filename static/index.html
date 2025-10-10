@@ -82,29 +82,34 @@
                 <div id="feedbacks-content">
                     <div class="feedback-form-container">
                         <div class="form-group">
-                            <label>Selecionar Funcionário</label>
-                            <select id="feedback-employee" class="form-control">
+                            <label>Selecionar Funcionário *</label>
+                            <select id="feedback-employee" class="form-control" required>
                                 <option value="">Selecione...</option>
                             </select>
                         </div>
                         
                         <div class="form-group">
-                            <label>Feedback ao Funcionário</label>
-                            <textarea id="feedback-to-employee" class="form-control" rows="4" placeholder="Compartilhe feedback construtivo para o funcionário..."></textarea>
+                            <label>Data do Feedback *</label>
+                            <input type="date" id="feedback-date" class="form-control" required>
                         </div>
                         
                         <div class="form-group">
-                            <label>Feedback ao Gestor (você)</label>
+                            <label>Feedback ao Funcionário *</label>
+                            <textarea id="feedback-to-employee" class="form-control" rows="4" placeholder="Compartilhe feedback construtivo para o funcionário..." required></textarea>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Feedback ao Gestor (opcional)</label>
                             <textarea id="feedback-to-manager" class="form-control" rows="4" placeholder="O que o funcionário gostaria de dizer ao gestor..."></textarea>
                         </div>
                         
                         <div class="form-group">
-                            <label>Expectativas sobre a Empresa</label>
+                            <label>Expectativas sobre a Empresa (opcional)</label>
                             <textarea id="expectations-company" class="form-control" rows="3" placeholder="Expectativas do funcionário em relação à empresa..."></textarea>
                         </div>
                         
                         <div class="form-group">
-                            <label>Expectativas sobre o Gestor</label>
+                            <label>Expectativas sobre o Gestor (opcional)</label>
                             <textarea id="expectations-manager" class="form-control" rows="3" placeholder="Expectativas do funcionário em relação ao gestor..."></textarea>
                         </div>
                         
@@ -121,6 +126,8 @@
             <div id="modal-body"></div>
         </div>
     </div>
+
+    <div class="toast-container" id="toast-container"></div>
 
     <script src="/app.js"></script>
 </body>

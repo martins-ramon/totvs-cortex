@@ -65,15 +65,32 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
                 manager_id INTEGER REFERENCES managers(id) ON DELETE CASCADE,
-                feedback_to_employee TEXT,
+                feedback_to_employee TEXT NOT NULL,
                 feedback_to_manager TEXT,
                 expectations_company TEXT,
                 expectations_manager TEXT,
+                feedback_date DATE NOT NULL,
                 embedding vector(1536),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
         conn.commit()
+        
+        try:
+            conn.execute(text("""
+                ALTER TABLE feedbacks 
+                ADD COLUMN IF NOT EXISTS feedback_date DATE DEFAULT CURRENT_DATE
+            """))
+            conn.commit()
+            
+            conn.execute(text("""
+                UPDATE feedbacks 
+                SET feedback_date = COALESCE(feedback_date, DATE(created_at))
+                WHERE feedback_date IS NULL
+            """))
+            conn.commit()
+        except Exception as e:
+            print(f"Migration note: {e}")
 
 def hash_password(password):
     return generate_password_hash(password)
@@ -88,33 +105,34 @@ def get_embedding(text):
 def generate_insights(employee_name, latest_feedback, all_feedbacks):
     feedback_history = "\n\n".join([
         f"Feedback {i+1} ({fb['created_at']}):\n"
-        f"To Employee: {fb['feedback_to_employee']}\n"
-        f"To Manager: {fb['feedback_to_manager']}\n"
-        f"Expectations (Company): {fb['expectations_company']}\n"
-        f"Expectations (Manager): {fb['expectations_manager']}"
+        f"Ao Funcionário: {fb['feedback_to_employee']}\n"
+        f"Ao Gestor: {fb['feedback_to_manager'] or 'Não informado'}\n"
+        f"Expectativas (Empresa): {fb['expectations_company'] or 'Não informado'}\n"
+        f"Expectativas (Gestor): {fb['expectations_manager'] or 'Não informado'}"
         for i, fb in enumerate(all_feedbacks[-5:])
     ])
     
-    prompt = f"""Analyze the following feedback data for {employee_name} and generate concise insights in JSON format.
+    prompt = f"""Analise os dados de feedback de {employee_name} e gere insights concisos em formato JSON, em PORTUGUÊS BRASILEIRO.
 
-Latest Feedback:
-- To Employee: {latest_feedback['feedback_to_employee']}
-- To Manager: {latest_feedback['feedback_to_manager']}
-- Expectations (Company): {latest_feedback['expectations_company']}
-- Expectations (Manager): {latest_feedback['expectations_manager']}
+Último Feedback:
+- Ao Funcionário: {latest_feedback['feedback_to_employee']}
+- Ao Gestor: {latest_feedback['feedback_to_manager'] or 'Não informado'}
+- Expectativas (Empresa): {latest_feedback['expectations_company'] or 'Não informado'}
+- Expectativas (Gestor): {latest_feedback['expectations_manager'] or 'Não informado'}
 
-Historical Feedback:
+Histórico de Feedbacks:
 {feedback_history}
 
-Generate insights in the following JSON format:
+Gere insights no seguinte formato JSON (TODO EM PORTUGUÊS):
 {{
-    "development_points": ["point 1", "point 2", "point 3"],
-    "strengths": ["strength 1", "strength 2", "strength 3"],
-    "turnover_risk": {{"level": "low|medium|high", "reason": "explanation"}},
-    "requires_attention": ["action item 1", "action item 2"]
+    "resumo": "Um parágrafo resumindo o último feedback de forma clara e objetiva",
+    "pontos_desenvolvimento": ["ponto 1", "ponto 2", "ponto 3"],
+    "fortalezas": ["força 1", "força 2", "força 3"],
+    "risco_saida": {{"nivel": "baixo|medio|alto", "motivo": "explicação clara"}},
+    "acoes_pendencias": ["ação 1", "ação 2"] ou [] se não houver
 }}
 
-Be specific, actionable, and focus on patterns across feedbacks."""
+Seja específico, acionável e foque em padrões identificados nos feedbacks. Use SEMPRE português brasileiro."""
 
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
@@ -320,23 +338,32 @@ def feedbacks():
         if request.method == 'POST':
             data = request.json
             
-            combined_text = f"{data['feedback_to_employee']} {data['feedback_to_manager']} {data['expectations_company']} {data['expectations_manager']}"
+            feedback_parts = [data['feedback_to_employee']]
+            if data.get('feedback_to_manager'):
+                feedback_parts.append(data['feedback_to_manager'])
+            if data.get('expectations_company'):
+                feedback_parts.append(data['expectations_company'])
+            if data.get('expectations_manager'):
+                feedback_parts.append(data['expectations_manager'])
+            
+            combined_text = " ".join(feedback_parts)
             embedding = get_embedding(combined_text)
             
             result = db.execute(
                 text("""
                     INSERT INTO feedbacks 
-                    (employee_id, manager_id, feedback_to_employee, feedback_to_manager, expectations_company, expectations_manager, embedding) 
-                    VALUES (:employee_id, :manager_id, :feedback_to_employee, :feedback_to_manager, :expectations_company, :expectations_manager, :embedding) 
+                    (employee_id, manager_id, feedback_to_employee, feedback_to_manager, expectations_company, expectations_manager, feedback_date, embedding) 
+                    VALUES (:employee_id, :manager_id, :feedback_to_employee, :feedback_to_manager, :expectations_company, :expectations_manager, :feedback_date, :embedding) 
                     RETURNING id
                 """),
                 {
                     "employee_id": data['employee_id'],
                     "manager_id": session['manager_id'],
                     "feedback_to_employee": data['feedback_to_employee'],
-                    "feedback_to_manager": data['feedback_to_manager'],
-                    "expectations_company": data['expectations_company'],
-                    "expectations_manager": data['expectations_manager'],
+                    "feedback_to_manager": data.get('feedback_to_manager', ''),
+                    "expectations_company": data.get('expectations_company', ''),
+                    "expectations_manager": data.get('expectations_manager', ''),
+                    "feedback_date": data['feedback_date'],
                     "embedding": str(embedding)
                 }
             )
@@ -348,11 +375,11 @@ def feedbacks():
             result = db.execute(
                 text("""
                     SELECT f.id, f.employee_id, e.name, f.feedback_to_employee, f.feedback_to_manager, 
-                           f.expectations_company, f.expectations_manager, f.created_at
+                           f.expectations_company, f.expectations_manager, f.feedback_date, f.created_at
                     FROM feedbacks f
                     JOIN employees e ON f.employee_id = e.id
                     WHERE f.manager_id = :manager_id
-                    ORDER BY f.created_at DESC
+                    ORDER BY f.feedback_date DESC, f.created_at DESC
                 """),
                 {"manager_id": session['manager_id']}
             )
@@ -365,7 +392,8 @@ def feedbacks():
                     "feedback_to_manager": row[4],
                     "expectations_company": row[5],
                     "expectations_manager": row[6],
-                    "created_at": row[7].isoformat() if row[7] else None
+                    "feedback_date": row[7].isoformat() if row[7] else None,
+                    "created_at": row[8].isoformat() if row[8] else None
                 }
                 for row in result.fetchall()
             ]
@@ -385,16 +413,16 @@ def dashboard():
             text("""
                 SELECT e.id, e.name, e.position, e.department,
                        f.feedback_to_employee, f.feedback_to_manager, 
-                       f.expectations_company, f.expectations_manager, f.created_at
+                       f.expectations_company, f.expectations_manager, f.feedback_date, f.created_at
                 FROM employees e
                 LEFT JOIN LATERAL (
                     SELECT * FROM feedbacks 
                     WHERE employee_id = e.id 
-                    ORDER BY created_at DESC 
+                    ORDER BY feedback_date DESC, created_at DESC 
                     LIMIT 1
                 ) f ON true
                 WHERE e.manager_id = :manager_id
-                ORDER BY f.created_at DESC NULLS LAST
+                ORDER BY f.feedback_date DESC NULLS LAST, f.created_at DESC NULLS LAST
             """),
             {"manager_id": session['manager_id']}
         )
@@ -417,17 +445,18 @@ def dashboard():
                     "feedback_to_manager": row[5],
                     "expectations_company": row[6],
                     "expectations_manager": row[7],
-                    "created_at": row[8].isoformat() if row[8] else None
+                    "feedback_date": row[8].isoformat() if row[8] else None,
+                    "created_at": row[9].isoformat() if row[9] else None
                 }
                 employee_data["latest_feedback"] = latest_feedback
                 
                 all_feedbacks_result = db.execute(
                     text("""
                         SELECT feedback_to_employee, feedback_to_manager, 
-                               expectations_company, expectations_manager, created_at
+                               expectations_company, expectations_manager, feedback_date, created_at
                         FROM feedbacks
                         WHERE employee_id = :employee_id
-                        ORDER BY created_at DESC
+                        ORDER BY feedback_date DESC, created_at DESC
                     """),
                     {"employee_id": row[0]}
                 )
@@ -438,7 +467,8 @@ def dashboard():
                         "feedback_to_manager": fb[1],
                         "expectations_company": fb[2],
                         "expectations_manager": fb[3],
-                        "created_at": fb[4].isoformat() if fb[4] else None
+                        "feedback_date": fb[4].isoformat() if fb[4] else None,
+                        "created_at": fb[5].isoformat() if fb[5] else None
                     }
                     for fb in all_feedbacks_result.fetchall()
                 ]
