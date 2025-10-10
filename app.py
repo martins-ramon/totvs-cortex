@@ -20,7 +20,12 @@ if not DATABASE_URL:
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY environment variable is not set")
 
-engine = create_engine(DATABASE_URL)
+if '5432' in DATABASE_URL and 'supabase' in DATABASE_URL:
+    print("WARNING: You're using Supabase direct connection (port 5432).")
+    print("This may not work from Replit. Use Transaction Pooler (port 6543) instead.")
+    print("Instructions in README.md")
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=3600)
 SessionLocal = sessionmaker(bind=engine)
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
