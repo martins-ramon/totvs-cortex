@@ -163,6 +163,41 @@
 
     <div class="toast-container" id="toast-container"></div>
 
+    <!-- Chatbot Flutuante -->
+    <div id="chat-widget" class="chat-widget">
+        <button id="chat-button" class="chat-button" onclick="toggleChat()">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+        </button>
+        
+        <div id="chat-window" class="chat-window" style="display: none;">
+            <div class="chat-header">
+                <h3>💬 Assistente de Feedbacks</h3>
+                <button onclick="toggleChat()" class="chat-close">&times;</button>
+            </div>
+            <div id="chat-messages" class="chat-messages">
+                <div class="chat-message bot-message">
+                    <p>Olá! Pergunte-me sobre seus feedbacks registrados. Por exemplo:</p>
+                    <ul>
+                        <li>"Quando foi o último feedback do João?"</li>
+                        <li>"Quais pontos de desenvolvimento foram discutidos?"</li>
+                        <li>"Sobre o que falamos em março?"</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="chat-input-container">
+                <input 
+                    type="text" 
+                    id="chat-input" 
+                    placeholder="Digite sua pergunta..." 
+                    onkeypress="if(event.key === 'Enter') sendChatMessage()"
+                >
+                <button onclick="sendChatMessage()" class="chat-send-btn">Enviar</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/app.js"></script>
 </body>
 </html>

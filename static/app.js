@@ -722,4 +722,71 @@ window.onclick = function(event) {
     }
 }
 
+function toggleChat() {
+    const chatWindow = document.getElementById('chat-window');
+    const chatButton = document.getElementById('chat-button');
+    
+    if (chatWindow.style.display === 'none') {
+        chatWindow.style.display = 'flex';
+        chatButton.style.display = 'none';
+    } else {
+        chatWindow.style.display = 'none';
+        chatButton.style.display = 'flex';
+    }
+}
+
+async function sendChatMessage() {
+    const input = document.getElementById('chat-input');
+    const question = input.value.trim();
+    
+    if (!question) return;
+    
+    const messagesContainer = document.getElementById('chat-messages');
+    
+    const userMessage = document.createElement('div');
+    userMessage.className = 'chat-message user-message';
+    userMessage.textContent = question;
+    messagesContainer.appendChild(userMessage);
+    
+    input.value = '';
+    
+    const typingIndicator = document.createElement('div');
+    typingIndicator.className = 'chat-typing bot-message';
+    typingIndicator.innerHTML = '<span></span><span></span><span></span>';
+    messagesContainer.appendChild(typingIndicator);
+    
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    
+    try {
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ question })
+        });
+        
+        const data = await response.json();
+        
+        messagesContainer.removeChild(typingIndicator);
+        
+        const botMessage = document.createElement('div');
+        botMessage.className = 'chat-message bot-message';
+        botMessage.textContent = data.answer || data.error || 'Desculpe, ocorreu um erro.';
+        messagesContainer.appendChild(botMessage);
+        
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        
+    } catch (error) {
+        console.error('Chat error:', error);
+        messagesContainer.removeChild(typingIndicator);
+        
+        const errorMessage = document.createElement('div');
+        errorMessage.className = 'chat-message bot-message';
+        errorMessage.textContent = 'Desculpe, não consegui processar sua pergunta. Tente novamente.';
+        messagesContainer.appendChild(errorMessage);
+        
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+}
+
 checkAuth();

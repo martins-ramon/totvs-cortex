@@ -481,6 +481,98 @@ def dashboard():
     finally:
         db.close()
 
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    db = SessionLocal()
+    
+    try:
+        data = request.json
+        user_question = data.get('question', '')
+        
+        if not user_question:
+            return jsonify({"error": "Question is required"}), 400
+        
+        question_embedding = get_embedding(user_question)
+        
+        result = db.execute(
+            text("""
+                SELECT f.id, f.feedback_to_user, f.feedback_to_manager, 
+                       f.expectations_company, f.expectations_manager, 
+                       f.feedback_date, f.created_at, u.name,
+                       (1 - (f.embedding <=> :question_embedding::vector)) as similarity
+                FROM feedbacks f
+                JOIN users u ON f.user_id = u.id
+                WHERE f.author_id = :author_id
+                ORDER BY similarity DESC
+                LIMIT 5
+            """),
+            {
+                "question_embedding": str(question_embedding),
+                "author_id": session['user_id']
+            }
+        )
+        
+        relevant_feedbacks = []
+        for row in result.fetchall():
+            relevant_feedbacks.append({
+                "user_name": row[7],
+                "feedback_date": row[5].strftime('%d/%m/%Y') if row[5] else 'Data não informada',
+                "feedback_to_user": row[1],
+                "feedback_to_manager": row[2] or '',
+                "expectations_company": row[3] or '',
+                "expectations_manager": row[4] or '',
+                "similarity": float(row[8])
+            })
+        
+        if not relevant_feedbacks:
+            return jsonify({
+                "answer": "Não encontrei feedbacks relacionados à sua pergunta. Tente fazer outra pergunta ou verifique se já cadastrou feedbacks no sistema."
+            })
+        
+        context = "\n\n".join([
+            f"Feedback de {fb['user_name']} em {fb['feedback_date']}:\n"
+            f"- Ao usuário: {fb['feedback_to_user']}\n" +
+            (f"- Ao gestor: {fb['feedback_to_manager']}\n" if fb['feedback_to_manager'] else "") +
+            (f"- Expectativas (Empresa): {fb['expectations_company']}\n" if fb['expectations_company'] else "") +
+            (f"- Expectativas (Gestor): {fb['expectations_manager']}\n" if fb['expectations_manager'] else "")
+            for fb in relevant_feedbacks
+        ])
+        
+        chat_response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """Você é um assistente inteligente que ajuda gestores a encontrar informações em seus feedbacks registrados. 
+                    
+Responda SEMPRE em português brasileiro de forma clara, objetiva e profissional. 
+Use as informações dos feedbacks fornecidos para responder a pergunta do usuário.
+Se a pergunta for sobre datas, cite as datas específicas encontradas nos feedbacks.
+Se não houver informação suficiente, seja honesto e sugira ao usuário cadastrar mais feedbacks."""
+                },
+                {
+                    "role": "user",
+                    "content": f"Baseado nestes feedbacks:\n\n{context}\n\nPergunta: {user_question}"
+                }
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+        
+        return jsonify({
+            "answer": chat_response.choices[0].message.content,
+            "sources": len(relevant_feedbacks)
+        })
+        
+    except Exception as e:
+        print(f"Chat error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
 if __name__ == '__main__':
     init_db()
     app.run(host='0.0.0.0', port=5000, debug=True)
