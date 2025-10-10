@@ -214,13 +214,21 @@ async function showDashboard() {
         
         if (data.dashboard && data.dashboard.length > 0) {
             content.innerHTML = data.dashboard.map((item, index) => {
+                const userInitial = item.user_name.charAt(0).toUpperCase();
+                const photoElement = `<div class="user-avatar-placeholder" id="avatar-${item.user_id}">${userInitial}</div>`;
+                
+                loadUserAvatarAsync(item.user_id);
+                
                 if (!item.latest_feedback) {
                     return `
                         <div class="insight-card">
                             <div class="insight-header">
-                                <div class="employee-info">
-                                    <h3>${item.user_name}</h3>
-                                    <p>${item.company || 'Sem empresa'}</p>
+                                <div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">
+                                    ${photoElement}
+                                    <div>
+                                        <h3>${item.user_name}</h3>
+                                        <p>${item.company || 'Sem empresa'}</p>
+                                    </div>
                                 </div>
                             </div>
                             <div class="no-data">
@@ -249,9 +257,12 @@ async function showDashboard() {
                 return `
                     <div class="insight-card">
                         <div class="insight-header">
-                            <div class="employee-info">
-                                <h3>${item.user_name}</h3>
-                                <p>${item.company || 'Sem empresa'}</p>
+                            <div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">
+                                ${photoElement}
+                                <div>
+                                    <h3>${item.user_name}</h3>
+                                    <p>${item.company || 'Sem empresa'}</p>
+                                </div>
                             </div>
                             <div class="feedback-date">
                                 ${new Date(feedback.feedback_date || feedback.created_at).toLocaleDateString('pt-BR')}
@@ -790,6 +801,26 @@ function toggleChat() {
     } else {
         chatWindow.style.display = 'none';
         chatButton.style.display = 'flex';
+    }
+}
+
+async function loadUserAvatarAsync(userId) {
+    try {
+        const response = await fetch(`/api/user/${userId}/photo`, {
+            credentials: 'include'
+        });
+        const data = await response.json();
+        
+        const avatarElement = document.getElementById(`avatar-${userId}`);
+        if (avatarElement && data.photo) {
+            const img = document.createElement('img');
+            img.src = data.photo;
+            img.className = 'user-avatar';
+            img.alt = 'Foto de perfil';
+            avatarElement.replaceWith(img);
+        }
+    } catch (error) {
+        console.error(`Failed to load avatar for user ${userId}:`, error);
     }
 }
 
