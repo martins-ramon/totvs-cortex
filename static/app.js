@@ -45,7 +45,7 @@ async function checkAuth() {
         if (response.ok) {
             const data = await response.json();
             if (data.authenticated) {
-                currentUser = data.manager;
+                currentUser = data.user;
                 showApp();
                 return true;
             }
@@ -68,7 +68,7 @@ function showApp() {
     document.getElementById('auth-container').style.display = 'none';
     document.getElementById('app-container').style.display = 'flex';
     document.getElementById('user-name').textContent = currentUser.name;
-    document.getElementById('user-company').textContent = currentUser.company_name;
+    document.getElementById('user-company').textContent = currentUser.company;
     showDashboard();
 }
 
@@ -102,7 +102,7 @@ async function login() {
         const data = await response.json();
         
         if (data.success) {
-            currentUser = data.manager;
+            currentUser = data.user;
             showApp();
             showToast('Login realizado com sucesso!', 'success');
         } else {
@@ -116,12 +116,13 @@ async function login() {
 
 async function register() {
     const name = document.getElementById('register-name').value;
-    const company_name = document.getElementById('register-company').value;
+    const company = document.getElementById('register-company').value;
+    const phone = document.getElementById('register-phone').value;
     const email = document.getElementById('register-email').value;
     const password = document.getElementById('register-password').value;
     
-    if (!name || !company_name || !email || !password) {
-        showToast('Preencha todos os campos', 'warning');
+    if (!name || !company || !email || !password) {
+        showToast('Preencha todos os campos obrigatórios', 'warning');
         return;
     }
     
@@ -130,7 +131,7 @@ async function register() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ name, company_name, email, password })
+            body: JSON.stringify({ name, company, phone, email, password })
         });
         
         const data = await response.json();
@@ -173,8 +174,8 @@ function setActiveNav(viewName) {
     const navItems = document.querySelectorAll('.nav-item');
     const viewMap = {
         'dashboard': 0,
-        'employees': 1,
-        'feedbacks': 2
+        'feedbacks': 1,
+        'account': 2
     };
     
     if (viewMap[viewName] !== undefined) {
@@ -218,8 +219,8 @@ async function showDashboard() {
                         <div class="insight-card">
                             <div class="insight-header">
                                 <div class="employee-info">
-                                    <h3>${item.employee_name}</h3>
-                                    <p>${item.position || 'Sem cargo'} ${item.department ? '• ' + item.department : ''}</p>
+                                    <h3>${item.user_name}</h3>
+                                    <p>${item.company || 'Sem empresa'}</p>
                                 </div>
                             </div>
                             <div class="no-data">
@@ -249,8 +250,8 @@ async function showDashboard() {
                     <div class="insight-card">
                         <div class="insight-header">
                             <div class="employee-info">
-                                <h3>${item.employee_name}</h3>
-                                <p>${item.position || 'Sem cargo'} ${item.department ? '• ' + item.department : ''}</p>
+                                <h3>${item.user_name}</h3>
+                                <p>${item.company || 'Sem empresa'}</p>
                             </div>
                             <div class="feedback-date">
                                 ${new Date(feedback.feedback_date || feedback.created_at).toLocaleDateString('pt-BR')}
@@ -317,7 +318,7 @@ async function showDashboard() {
                 `;
             }).join('');
         } else {
-            content.innerHTML = '<div class="no-data"><p>Nenhum funcionário cadastrado. Adicione funcionários e feedbacks para ver insights!</p></div>';
+            content.innerHTML = '<div class="no-data"><p>Nenhum usuário gerenciado. Os usuários devem te selecionar como gestor no perfil deles!</p></div>';
         }
     } catch (error) {
         console.error('Failed to load dashboard:', error);
@@ -556,15 +557,15 @@ async function deleteEmployee(id) {
 }
 
 async function submitFeedback() {
-    const employee_id = document.getElementById('feedback-employee').value;
+    const user_id = document.getElementById('feedback-user').value;
     const feedback_date = document.getElementById('feedback-date').value;
     const feedback_to_employee = document.getElementById('feedback-to-employee').value;
     const feedback_to_manager = document.getElementById('feedback-to-manager').value;
     const expectations_company = document.getElementById('expectations-company').value;
     const expectations_manager = document.getElementById('expectations-manager').value;
     
-    if (!employee_id || !feedback_date || !feedback_to_employee) {
-        showToast('Preencha os campos obrigatórios (funcionário, data e feedback ao funcionário)', 'warning');
+    if (!user_id || !feedback_date || !feedback_to_employee) {
+        showToast('Preencha os campos obrigatórios (usuário, data e feedback)', 'warning');
         return;
     }
     
@@ -578,7 +579,7 @@ async function submitFeedback() {
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
             body: JSON.stringify({
-                employee_id: parseInt(employee_id),
+                user_id: parseInt(user_id),
                 feedback_date,
                 feedback_to_employee,
                 feedback_to_manager,
@@ -592,7 +593,7 @@ async function submitFeedback() {
         if (data.success) {
             showToast('Feedback salvo e vetorizado com sucesso!', 'success');
             
-            document.getElementById('feedback-employee').value = '';
+            document.getElementById('feedback-user').value = '';
             document.getElementById('feedback-to-employee').value = '';
             document.getElementById('feedback-to-manager').value = '';
             document.getElementById('expectations-company').value = '';
@@ -608,6 +609,105 @@ async function submitFeedback() {
     } finally {
         button.disabled = false;
         button.textContent = 'Salvar Feedback com IA';
+    }
+}
+
+async function showFeedbacks() {
+    setActiveNav('feedbacks');
+    document.getElementById('feedbacks-view').style.display = 'block';
+    
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('feedback-date').value = today;
+    
+    await loadManagedUsers();
+}
+
+async function loadManagedUsers() {
+    try {
+        const response = await fetch('/api/managed-users', {
+            credentials: 'include'
+        });
+        
+        const data = await response.json();
+        const select = document.getElementById('feedback-user');
+        
+        select.innerHTML = '<option value="">Selecione...</option>' +
+            data.managed_users.map(user => 
+                `<option value="${user.id}">${user.name} (${user.company})</option>`
+            ).join('');
+    } catch (error) {
+        console.error('Failed to load managed users:', error);
+    }
+}
+
+async function showAccount() {
+    setActiveNav('account');
+    document.getElementById('account-view').style.display = 'block';
+    
+    document.getElementById('account-name').value = currentUser.name;
+    document.getElementById('account-email').value = currentUser.email;
+    document.getElementById('account-company').value = currentUser.company || '';
+    document.getElementById('account-phone').value = currentUser.phone || '';
+    
+    await loadAvailableManagers();
+    
+    const managerSelect = document.getElementById('account-manager');
+    managerSelect.value = currentUser.manager_id || '';
+}
+
+async function loadAvailableManagers() {
+    try {
+        const response = await fetch('/api/users', {
+            credentials: 'include'
+        });
+        
+        const data = await response.json();
+        const select = document.getElementById('account-manager');
+        
+        select.innerHTML = '<option value="">Nenhum</option>' +
+            data.users.map(user => 
+                `<option value="${user.id}">${user.name} (${user.company})</option>`
+            ).join('');
+    } catch (error) {
+        console.error('Failed to load users:', error);
+    }
+}
+
+async function updateProfile() {
+    const name = document.getElementById('account-name').value;
+    const company = document.getElementById('account-company').value;
+    const phone = document.getElementById('account-phone').value;
+    const manager_id = document.getElementById('account-manager').value;
+    
+    if (!name || !company) {
+        showToast('Nome e empresa são obrigatórios', 'warning');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/profile', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ 
+                name, 
+                company, 
+                phone: phone || '',
+                manager_id: manager_id || null
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast('Perfil atualizado com sucesso!', 'success');
+            await checkAuth();
+        } else {
+            showToast('Erro ao atualizar perfil', 'error');
+        }
+    } catch (error) {
+        console.error('Failed to update profile:', error);
+        showToast('Erro ao atualizar perfil', 'error');
     }
 }
 
