@@ -36,25 +36,14 @@ def init_db():
         conn.commit()
         
         conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS managers (
+            CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
                 name VARCHAR(255) NOT NULL,
-                company_name VARCHAR(255) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """))
-        conn.commit()
-        
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS employees (
-                id SERIAL PRIMARY KEY,
-                manager_id INTEGER REFERENCES managers(id) ON DELETE CASCADE,
-                name VARCHAR(255) NOT NULL,
-                email VARCHAR(255) NOT NULL,
-                position VARCHAR(255),
-                department VARCHAR(255),
+                company VARCHAR(255) NOT NULL,
+                phone VARCHAR(50),
+                manager_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """))
@@ -63,8 +52,8 @@ def init_db():
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS feedbacks (
                 id SERIAL PRIMARY KEY,
-                employee_id INTEGER REFERENCES employees(id) ON DELETE CASCADE,
-                manager_id INTEGER REFERENCES managers(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                author_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
                 feedback_to_employee TEXT NOT NULL,
                 feedback_to_manager TEXT,
                 expectations_company TEXT,
@@ -153,19 +142,21 @@ def register():
     
     try:
         result = db.execute(
-            text("INSERT INTO managers (email, password_hash, name, company_name) VALUES (:email, :password_hash, :name, :company_name) RETURNING id"),
+            text("INSERT INTO users (email, password_hash, name, company, phone, manager_id) VALUES (:email, :password_hash, :name, :company, :phone, :manager_id) RETURNING id"),
             {
                 "email": data['email'],
                 "password_hash": hash_password(data['password']),
                 "name": data['name'],
-                "company_name": data['company_name']
+                "company": data.get('company', ''),
+                "phone": data.get('phone', ''),
+                "manager_id": data.get('manager_id')
             }
         )
         db.commit()
-        manager_id = result.fetchone()[0]
+        user_id = result.fetchone()[0]
         
-        session['manager_id'] = manager_id
-        return jsonify({"success": True, "manager_id": manager_id})
+        session['user_id'] = user_id
+        return jsonify({"success": True, "user_id": user_id})
     except Exception as e:
         db.rollback()
         return jsonify({"success": False, "error": str(e)}), 400
@@ -179,19 +170,19 @@ def login():
     
     try:
         result = db.execute(
-            text("SELECT id, name, company_name, password_hash FROM managers WHERE email = :email"),
+            text("SELECT id, name, company, password_hash FROM users WHERE email = :email"),
             {"email": data['email']}
         )
-        manager = result.fetchone()
+        user = result.fetchone()
         
-        if manager and check_password_hash(manager[3], data['password']):
-            session['manager_id'] = manager[0]
+        if user and check_password_hash(user[3], data['password']):
+            session['user_id'] = user[0]
             return jsonify({
                 "success": True,
-                "manager": {
-                    "id": manager[0],
-                    "name": manager[1],
-                    "company_name": manager[2]
+                "user": {
+                    "id": user[0],
+                    "name": user[1],
+                    "company": user[2]
                 }
             })
         else:
@@ -201,30 +192,43 @@ def login():
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
-    session.pop('manager_id', None)
+    session.pop('user_id', None)
     return jsonify({"success": True})
 
 @app.route('/api/current-user', methods=['GET'])
 def current_user():
-    if 'manager_id' not in session:
+    if 'user_id' not in session:
         return jsonify({"authenticated": False}), 401
     
     db = SessionLocal()
     try:
         result = db.execute(
-            text("SELECT id, name, email, company_name FROM managers WHERE id = :id"),
-            {"id": session['manager_id']}
+            text("SELECT id, name, email, company, phone, manager_id FROM users WHERE id = :id"),
+            {"id": session['user_id']}
         )
-        manager = result.fetchone()
+        user = result.fetchone()
         
-        if manager:
+        if user:
+            manager_name = None
+            if user[5]:
+                manager_result = db.execute(
+                    text("SELECT name FROM users WHERE id = :id"),
+                    {"id": user[5]}
+                )
+                manager_row = manager_result.fetchone()
+                if manager_row:
+                    manager_name = manager_row[0]
+            
             return jsonify({
                 "authenticated": True,
-                "manager": {
-                    "id": manager[0],
-                    "name": manager[1],
-                    "email": manager[2],
-                    "company_name": manager[3]
+                "user": {
+                    "id": user[0],
+                    "name": user[1],
+                    "email": user[2],
+                    "company": user[3],
+                    "phone": user[4],
+                    "manager_id": user[5],
+                    "manager_name": manager_name
                 }
             })
         else:
@@ -232,104 +236,91 @@ def current_user():
     finally:
         db.close()
 
-@app.route('/api/employees', methods=['GET', 'POST'])
-def employees():
-    if 'manager_id' not in session:
+@app.route('/api/users', methods=['GET'])
+def get_users():
+    if 'user_id' not in session:
         return jsonify({"error": "Unauthorized"}), 401
     
     db = SessionLocal()
     
     try:
-        if request.method == 'POST':
-            data = request.json
-            result = db.execute(
-                text("INSERT INTO employees (manager_id, name, email, position, department) VALUES (:manager_id, :name, :email, :position, :department) RETURNING id"),
-                {
-                    "manager_id": session['manager_id'],
-                    "name": data['name'],
-                    "email": data['email'],
-                    "position": data.get('position', ''),
-                    "department": data.get('department', '')
-                }
-            )
-            db.commit()
-            employee_id = result.fetchone()[0]
-            return jsonify({"success": True, "employee_id": employee_id})
-        else:
-            result = db.execute(
-                text("SELECT id, name, email, position, department, created_at FROM employees WHERE manager_id = :manager_id ORDER BY created_at DESC"),
-                {"manager_id": session['manager_id']}
-            )
-            employees = [
-                {
-                    "id": row[0],
-                    "name": row[1],
-                    "email": row[2],
-                    "position": row[3],
-                    "department": row[4],
-                    "created_at": row[5].isoformat() if row[5] else None
-                }
-                for row in result.fetchall()
-            ]
-            return jsonify({"employees": employees})
+        result = db.execute(
+            text("SELECT id, name, email, company FROM users WHERE id != :current_user_id ORDER BY name"),
+            {"current_user_id": session['user_id']}
+        )
+        users = [
+            {
+                "id": row[0],
+                "name": row[1],
+                "email": row[2],
+                "company": row[3]
+            }
+            for row in result.fetchall()
+        ]
+        return jsonify({"users": users})
     finally:
         db.close()
 
-@app.route('/api/employees/<int:employee_id>', methods=['GET', 'PUT', 'DELETE'])
-def employee_detail(employee_id):
-    if 'manager_id' not in session:
+@app.route('/api/managed-users', methods=['GET'])
+def get_managed_users():
+    if 'user_id' not in session:
         return jsonify({"error": "Unauthorized"}), 401
     
     db = SessionLocal()
     
     try:
-        if request.method == 'GET':
-            result = db.execute(
-                text("SELECT id, name, email, position, department FROM employees WHERE id = :id AND manager_id = :manager_id"),
-                {"id": employee_id, "manager_id": session['manager_id']}
-            )
-            employee = result.fetchone()
-            
-            if employee:
-                return jsonify({
-                    "id": employee[0],
-                    "name": employee[1],
-                    "email": employee[2],
-                    "position": employee[3],
-                    "department": employee[4]
-                })
-            else:
-                return jsonify({"error": "Employee not found"}), 404
-        
-        elif request.method == 'PUT':
-            data = request.json
-            db.execute(
-                text("UPDATE employees SET name = :name, email = :email, position = :position, department = :department WHERE id = :id AND manager_id = :manager_id"),
-                {
-                    "id": employee_id,
-                    "manager_id": session['manager_id'],
-                    "name": data['name'],
-                    "email": data['email'],
-                    "position": data.get('position', ''),
-                    "department": data.get('department', '')
-                }
-            )
-            db.commit()
-            return jsonify({"success": True})
-        
-        elif request.method == 'DELETE':
-            db.execute(
-                text("DELETE FROM employees WHERE id = :id AND manager_id = :manager_id"),
-                {"id": employee_id, "manager_id": session['manager_id']}
-            )
-            db.commit()
-            return jsonify({"success": True})
+        result = db.execute(
+            text("SELECT id, name, email, company, phone FROM users WHERE manager_id = :manager_id ORDER BY name"),
+            {"manager_id": session['user_id']}
+        )
+        managed_users = [
+            {
+                "id": row[0],
+                "name": row[1],
+                "email": row[2],
+                "company": row[3],
+                "phone": row[4]
+            }
+            for row in result.fetchall()
+        ]
+        return jsonify({"managed_users": managed_users})
+    finally:
+        db.close()
+
+@app.route('/api/profile', methods=['PUT'])
+def update_profile():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.json
+    db = SessionLocal()
+    
+    try:
+        db.execute(
+            text("""
+                UPDATE users 
+                SET name = :name, company = :company, phone = :phone, manager_id = :manager_id
+                WHERE id = :id
+            """),
+            {
+                "id": session['user_id'],
+                "name": data['name'],
+                "company": data.get('company', ''),
+                "phone": data.get('phone', ''),
+                "manager_id": data.get('manager_id')
+            }
+        )
+        db.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 400
     finally:
         db.close()
 
 @app.route('/api/feedbacks', methods=['GET', 'POST'])
 def feedbacks():
-    if 'manager_id' not in session:
+    if 'user_id' not in session:
         return jsonify({"error": "Unauthorized"}), 401
     
     db = SessionLocal()
@@ -352,13 +343,13 @@ def feedbacks():
             result = db.execute(
                 text("""
                     INSERT INTO feedbacks 
-                    (employee_id, manager_id, feedback_to_employee, feedback_to_manager, expectations_company, expectations_manager, feedback_date, embedding) 
-                    VALUES (:employee_id, :manager_id, :feedback_to_employee, :feedback_to_manager, :expectations_company, :expectations_manager, :feedback_date, :embedding) 
+                    (user_id, author_id, feedback_to_employee, feedback_to_manager, expectations_company, expectations_manager, feedback_date, embedding) 
+                    VALUES (:user_id, :author_id, :feedback_to_employee, :feedback_to_manager, :expectations_company, :expectations_manager, :feedback_date, :embedding) 
                     RETURNING id
                 """),
                 {
-                    "employee_id": data['employee_id'],
-                    "manager_id": session['manager_id'],
+                    "user_id": data['user_id'],
+                    "author_id": session['user_id'],
                     "feedback_to_employee": data['feedback_to_employee'],
                     "feedback_to_manager": data.get('feedback_to_manager', ''),
                     "expectations_company": data.get('expectations_company', ''),
@@ -374,20 +365,20 @@ def feedbacks():
         else:
             result = db.execute(
                 text("""
-                    SELECT f.id, f.employee_id, e.name, f.feedback_to_employee, f.feedback_to_manager, 
+                    SELECT f.id, f.user_id, u.name, f.feedback_to_employee, f.feedback_to_manager, 
                            f.expectations_company, f.expectations_manager, f.feedback_date, f.created_at
                     FROM feedbacks f
-                    JOIN employees e ON f.employee_id = e.id
-                    WHERE f.manager_id = :manager_id
+                    JOIN users u ON f.user_id = u.id
+                    WHERE f.author_id = :author_id
                     ORDER BY f.feedback_date DESC, f.created_at DESC
                 """),
-                {"manager_id": session['manager_id']}
+                {"author_id": session['user_id']}
             )
             feedbacks = [
                 {
                     "id": row[0],
-                    "employee_id": row[1],
-                    "employee_name": row[2],
+                    "user_id": row[1],
+                    "user_name": row[2],
                     "feedback_to_employee": row[3],
                     "feedback_to_manager": row[4],
                     "expectations_company": row[5],
@@ -403,7 +394,7 @@ def feedbacks():
 
 @app.route('/api/dashboard', methods=['GET'])
 def dashboard():
-    if 'manager_id' not in session:
+    if 'user_id' not in session:
         return jsonify({"error": "Unauthorized"}), 401
     
     db = SessionLocal()
@@ -411,30 +402,30 @@ def dashboard():
     try:
         result = db.execute(
             text("""
-                SELECT e.id, e.name, e.position, e.department,
+                SELECT u.id, u.name, u.company, u.phone,
                        f.feedback_to_employee, f.feedback_to_manager, 
                        f.expectations_company, f.expectations_manager, f.feedback_date, f.created_at
-                FROM employees e
+                FROM users u
                 LEFT JOIN LATERAL (
                     SELECT * FROM feedbacks 
-                    WHERE employee_id = e.id 
+                    WHERE user_id = u.id 
                     ORDER BY feedback_date DESC, created_at DESC 
                     LIMIT 1
                 ) f ON true
-                WHERE e.manager_id = :manager_id
+                WHERE u.manager_id = :manager_id
                 ORDER BY f.feedback_date DESC NULLS LAST, f.created_at DESC NULLS LAST
             """),
-            {"manager_id": session['manager_id']}
+            {"manager_id": session['user_id']}
         )
         
         dashboard_data = []
         
         for row in result.fetchall():
-            employee_data = {
-                "employee_id": row[0],
-                "employee_name": row[1],
-                "position": row[2],
-                "department": row[3],
+            user_data = {
+                "user_id": row[0],
+                "user_name": row[1],
+                "company": row[2],
+                "phone": row[3],
                 "latest_feedback": None,
                 "insights": None
             }
@@ -448,17 +439,17 @@ def dashboard():
                     "feedback_date": row[8].isoformat() if row[8] else None,
                     "created_at": row[9].isoformat() if row[9] else None
                 }
-                employee_data["latest_feedback"] = latest_feedback
+                user_data["latest_feedback"] = latest_feedback
                 
                 all_feedbacks_result = db.execute(
                     text("""
                         SELECT feedback_to_employee, feedback_to_manager, 
                                expectations_company, expectations_manager, feedback_date, created_at
                         FROM feedbacks
-                        WHERE employee_id = :employee_id
+                        WHERE user_id = :user_id
                         ORDER BY feedback_date DESC, created_at DESC
                     """),
-                    {"employee_id": row[0]}
+                    {"user_id": row[0]}
                 )
                 
                 all_feedbacks = [
@@ -474,9 +465,9 @@ def dashboard():
                 ]
                 
                 insights = generate_insights(row[1], latest_feedback, all_feedbacks)
-                employee_data["insights"] = insights
+                user_data["insights"] = insights
             
-            dashboard_data.append(employee_data)
+            dashboard_data.append(user_data)
         
         return jsonify({"dashboard": dashboard_data})
     finally:
