@@ -990,3 +990,62 @@ body {
         max-width: 380px;
     }
 }
+
+/* Adicione este código ao seu styles.css */
+
+/* Estilo para a foto do perfil na barra lateral */
+.user-avatar-sidebar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%; /* Deixa a foto redonda */
+    object-fit: cover;   /* Garante que a imagem preencha o espaço */
+    border: 2px solid #e2e8f0; /* Borda sutil */
+    margin-bottom: 8px;
+}
+
+/* Ajustes no rodapé da barra lateral para centralizar a foto e o nome */
+.sidebar-footer .user-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+/* Estilo para o nome do usuário como link */
+#user-name-link {
+    color: #f1f5f9;
+    text-decoration: none;
+    font-weight: 500;
+    margin-bottom: 12px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background-color 0.2s ease;
+}
+
+#user-name-link:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Divisor para o formulário de troca de senha */
+.form-divider {
+    border: none;
+    height: 1px;
+    background-color: #e2e8f0;
+    margin: 2rem 0;
+}
+
+/* Botão secundário para a troca de senha */
+.btn-secondary {
+    background-color: #64748B;
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s ease;
+}
+
+.btn-secondary:hover {
+    background-color: #475569;
+}

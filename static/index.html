@@ -10,8 +10,8 @@
 <body>
     <div id="auth-container" class="auth-container">
         <div class="auth-card">
-            <h1 class="auth-title">FeedbackAI</h1>
-            <p class="auth-subtitle">Sistema de Feedback Assistido por IA</p>
+            <h1 class="auth-title">Cortex</h1>
+            <p class="auth-subtitle">Insights para liderar com confiança.</p>
             
             <div id="login-form" class="auth-form">
                 <h2>Login</h2>
@@ -47,13 +47,14 @@
                 <a href="#" onclick="showFeedbacks()" class="nav-item">
                     <span>💬</span> Feedbacks
                 </a>
-                <a href="#" onclick="showAccount()" class="nav-item">
-                    <span>⚙️</span> Minha Conta
-                </a>
             </nav>
             <div class="sidebar-footer">
                 <div class="user-info">
-                    <p id="user-name"></p>
+                    <img id="sidebar-user-photo" class="user-avatar-sidebar" alt="Foto do perfil" style="display: none;">
+
+                    <a href="#" onclick="showAccount()" id="user-name-link">
+                        <span id="user-name"></span>
+                    </a>
                     <button onclick="logout()" class="btn-logout">Sair</button>
                 </div>
             </div>
@@ -73,7 +74,7 @@
                     <h2>Cadastrar Feedback</h2>
                 </div>
                 <div id="feedbacks-content">
-                    <div class="feedback-form-container">
+                    <form id="feedback-form" class="feedback-form-container">
                         <div class="form-group">
                             <label>Selecionar Usuário *</label>
                             <select id="feedback-user" class="form-control" required onchange="loadUserLastFeedback()">
@@ -84,34 +85,19 @@
                                 <button onclick="showFeedbackHistory()" class="btn-link" style="margin-left: 1rem;">Ver histórico</button>
                             </div>
                         </div>
-                        
+
                         <div class="form-group">
                             <label>Data do Feedback *</label>
                             <input type="date" id="feedback-date" class="form-control" required>
                         </div>
-                        
+
                         <div class="form-group">
-                            <label>Feedback ao Usuário *</label>
-                            <textarea id="feedback-to-employee" class="form-control" rows="4" placeholder="Compartilhe feedback construtivo..." required></textarea>
+                            <label>Descrição do Feedback *</label>
+                            <textarea id="feedback-description" class="form-control" rows="8" placeholder="Descreva os pontos fortes, pontos a desenvolver e as expectativas discutidas na conversa de feedback..." required></textarea>
                         </div>
-                        
-                        <div class="form-group">
-                            <label>Feedback ao Gestor (opcional)</label>
-                            <textarea id="feedback-to-manager" class="form-control" rows="4" placeholder="O que o usuário gostaria de dizer ao gestor..."></textarea>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label>Expectativas sobre a Empresa (opcional)</label>
-                            <textarea id="expectations-company" class="form-control" rows="3" placeholder="Expectativas em relação à empresa..."></textarea>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label>Expectativas sobre o Gestor (opcional)</label>
-                            <textarea id="expectations-manager" class="form-control" rows="3" placeholder="Expectativas em relação ao gestor..."></textarea>
-                        </div>
-                        
-                        <button onclick="submitFeedback()" class="btn-primary btn-large">Salvar Feedback com IA</button>
-                    </div>
+
+                        <button onclick="submitFeedback(event)" class="btn-primary btn-large">Salvar Feedback com IA</button>
+                    </form>
                 </div>
             </div>
 
@@ -158,6 +144,13 @@
                                 <option value="">Nenhum</option>
                             </select>
                             <small class="form-hint">Selecione quem é o seu gestor no sistema</small>
+                        </div>
+
+                        <hr class="form-divider">
+                        <div class="form-section">
+                            <h4>Segurança</h4>
+                            <p class="form-hint" style="margin-bottom: 1rem;">Para sua segurança, recomendamos alterar sua senha periodicamente.</p>
+                            <button onclick="openPasswordModal()" class="btn-secondary">Gerenciar Senha</button>
                         </div>
                         
                         <button onclick="updateProfile()" class="btn-primary btn-large">Salvar Alterações</button>
