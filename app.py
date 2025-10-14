@@ -43,6 +43,7 @@ def init_db():
                 name VARCHAR(255) NOT NULL,
                 company VARCHAR(255) NOT NULL,
                 phone VARCHAR(50),
+                slack_user_id VARCHAR(50),
                 manager_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -647,25 +648,58 @@ def user_photo(user_id):
     finally:
         db.close()
 
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint para deployment"""
+    return jsonify({"status": "healthy", "service": "FeedbackAI"}), 200
+
 @app.route('/api/chat', methods=['POST'])
 def chat():
-    if 'user_id' not in session:
-        return jsonify({"error": "Unauthorized"}), 401
-    
+    # A verificação de autorização foi movida para dentro do 'try'
+    # para tratar os dois casos: web e Slack.
+
     db = SessionLocal()
-    
+
     try:
         data = request.json
+        author_id = None
+
+        # NOVO: Verifica se a requisição veio do Slack (via n8n)
+        if 'slack_user_id' in data:
+            slack_user_id = data.get('slack_user_id')
+            # Busca o ID do usuário no banco de dados usando o slack_user_id
+            user_result = db.execute(
+                text("SELECT id FROM users WHERE slack_user_id = :slack_id"),
+                {"slack_id": slack_user_id}
+            ).fetchone()
+
+            if user_result:
+                author_id = user_result[0]
+            else:
+                # Retorna uma resposta amigável se o usuário do Slack não for encontrado
+                return jsonify({
+                    "answer": "Desculpe, não consegui encontrar seu usuário do Slack em nosso sistema. Por favor, verifique se sua conta está associada corretamente."
+                }), 404
+
+        # Lógica original: Verifica se a requisição veio da interface web
+        elif 'user_id' in session:
+            author_id = session['user_id']
+
+        # Se após as duas verificações não encontramos um autor, a requisição não é autorizada.
+        if not author_id:
+            return jsonify({"error": "Unauthorized"}), 401
+
         user_question = data.get('question', '')
-        
+
         if not user_question:
             return jsonify({"error": "Question is required"}), 400
-        
+
         question_embedding = get_embedding(user_question)
-        
-        # Converter embedding para formato PostgreSQL vector
+
         embedding_str = '[' + ','.join(map(str, question_embedding)) + ']'
-        
+
+        # MODIFICADO: A query agora usa a variável 'author_id' que foi definida
+        # dinamicamente (seja pelo Slack ID ou pela sessão web).
         result = db.execute(
             text("""
                 SELECT f.id, f.feedback_to_user, f.feedback_to_manager, 
@@ -680,10 +714,10 @@ def chat():
             """),
             {
                 "question_embedding": embedding_str,
-                "author_id": session['user_id']
+                "author_id": author_id 
             }
         )
-        
+
         relevant_feedbacks = []
         for row in result.fetchall():
             relevant_feedbacks.append({
@@ -695,12 +729,12 @@ def chat():
                 "expectations_manager": row[4] or '',
                 "similarity": float(row[8])
             })
-        
+
         if not relevant_feedbacks:
             return jsonify({
                 "answer": "Não encontrei feedbacks relacionados à sua pergunta. Tente fazer outra pergunta ou verifique se já cadastrou feedbacks no sistema."
             })
-        
+
         context = "\n\n".join([
             f"Feedback de {fb['user_name']} em {fb['feedback_date']}:\n"
             f"- Ao usuário: {fb['feedback_to_user']}\n" +
@@ -709,14 +743,14 @@ def chat():
             (f"- Expectativas (Gestor): {fb['expectations_manager']}\n" if fb['expectations_manager'] else "")
             for fb in relevant_feedbacks
         ])
-        
+
         chat_response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
                     "content": """Você é um assistente inteligente que ajuda gestores a encontrar informações em seus feedbacks registrados. 
-                    
+
 Responda SEMPRE em português brasileiro de forma clara, objetiva e profissional. 
 Use as informações dos feedbacks fornecidos para responder a pergunta do usuário.
 Se a pergunta for sobre datas, cite as datas específicas encontradas nos feedbacks.
@@ -730,12 +764,12 @@ Se não houver informação suficiente, seja honesto e sugira ao usuário cadast
             temperature=0.7,
             max_tokens=500
         )
-        
+
         return jsonify({
             "answer": chat_response.choices[0].message.content,
             "sources": len(relevant_feedbacks)
         })
-        
+
     except Exception as e:
         print(f"Chat error: {e}")
         return jsonify({"error": str(e)}), 500

@@ -4,21 +4,21 @@ function showToast(message, type = 'info', title = null) {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    
+
     const icons = {
         success: '✓',
         error: '✕',
         warning: '⚠',
         info: 'ℹ'
     };
-    
+
     const titles = {
         success: title || 'Sucesso',
         error: title || 'Erro',
         warning: title || 'Atenção',
         info: title || 'Informação'
     };
-    
+
     toast.innerHTML = `
         <div class="toast-icon">${icons[type] || icons.info}</div>
         <div class="toast-content">
@@ -27,9 +27,9 @@ function showToast(message, type = 'info', title = null) {
         </div>
         <div class="toast-close" onclick="this.parentElement.remove()">×</div>
     `;
-    
+
     container.appendChild(toast);
-    
+
     setTimeout(() => {
         toast.style.animation = 'slideInRight 0.3s ease reverse';
         setTimeout(() => toast.remove(), 300);
@@ -41,7 +41,7 @@ async function checkAuth() {
         const response = await fetch('/api/current-user', {
             credentials: 'include'
         });
-        
+
         if (response.ok) {
             const data = await response.json();
             if (data.authenticated) {
@@ -62,6 +62,9 @@ async function checkAuth() {
 function showAuth() {
     document.getElementById('auth-container').style.display = 'flex';
     document.getElementById('app-container').style.display = 'none';
+    // Adicionado: Esconde o chatbot na tela de login
+    document.getElementById('chat-button').style.display = 'none';
+    document.getElementById('chat-window').style.display = 'none';
 }
 
 function showApp() {
@@ -69,6 +72,8 @@ function showApp() {
     document.getElementById('app-container').style.display = 'flex';
     document.getElementById('user-name').textContent = currentUser.name;
     document.getElementById('user-company').textContent = currentUser.company;
+    // Adicionado: Mostra o botão do chatbot na aplicação
+    document.getElementById('chat-button').style.display = 'flex';
     showDashboard();
 }
 
@@ -85,12 +90,12 @@ function showRegister() {
 async function login() {
     const email = document.getElementById('login-email').value;
     const password = document.getElementById('login-password').value;
-    
+
     if (!email || !password) {
         showToast('Preencha todos os campos', 'warning');
         return;
     }
-    
+
     try {
         const response = await fetch('/api/login', {
             method: 'POST',
@@ -98,9 +103,9 @@ async function login() {
             credentials: 'include',
             body: JSON.stringify({ email, password })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             currentUser = data.user;
             showApp();
@@ -120,12 +125,12 @@ async function register() {
     const phone = document.getElementById('register-phone').value;
     const email = document.getElementById('register-email').value;
     const password = document.getElementById('register-password').value;
-    
+
     if (!name || !company || !email || !password) {
         showToast('Preencha todos os campos obrigatórios', 'warning');
         return;
     }
-    
+
     try {
         const response = await fetch('/api/register', {
             method: 'POST',
@@ -133,9 +138,9 @@ async function register() {
             credentials: 'include',
             body: JSON.stringify({ name, company, phone, email, password })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             showToast('Conta criada com sucesso!', 'success');
             await checkAuth();
@@ -166,18 +171,18 @@ function setActiveNav(viewName) {
     document.querySelectorAll('.nav-item').forEach(item => {
         item.classList.remove('active');
     });
-    
+
     document.querySelectorAll('.view').forEach(view => {
         view.style.display = 'none';
     });
-    
+
     const navItems = document.querySelectorAll('.nav-item');
     const viewMap = {
         'dashboard': 0,
         'feedbacks': 1,
         'account': 2
     };
-    
+
     if (viewMap[viewName] !== undefined) {
         navItems[viewMap[viewName]].classList.add('active');
     }
@@ -186,7 +191,7 @@ function setActiveNav(viewName) {
 function toggleCard(cardId) {
     const expanded = document.getElementById(`expanded-${cardId}`);
     const btn = document.getElementById(`btn-${cardId}`);
-    
+
     if (expanded.classList.contains('show')) {
         expanded.classList.remove('show');
         btn.classList.remove('expanded');
@@ -201,47 +206,47 @@ function toggleCard(cardId) {
 async function showDashboard() {
     setActiveNav('dashboard');
     document.getElementById('dashboard-view').style.display = 'block';
-    
+
     const content = document.getElementById('dashboard-content');
     content.innerHTML = '<div class="loading">Carregando insights...</div>';
-    
+
     try {
         const response = await fetch('/api/dashboard', {
             credentials: 'include'
         });
-        
+
         const data = await response.json();
-        
+
         if (data.dashboard && data.dashboard.length > 0) {
             content.innerHTML = data.dashboard.map((item, index) => {
                 const userInitial = item.user_name.charAt(0).toUpperCase();
                 const photoElement = `<div class="user-avatar-placeholder" id="avatar-${item.user_id}">${userInitial}</div>`;
-                
+
                 loadUserAvatarAsync(item.user_id);
-                
+
                 if (!item.latest_feedback) {
                     return `
-                        <div class="insight-card">
-                            <div class="insight-header">
-                                <div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">
-                                    ${photoElement}
-                                    <div>
-                                        <h3>${item.user_name}</h3>
-                                        <p>${item.company || 'Sem empresa'}</p>
+                            <div class="insight-card">
+                                <div class="insight-header">
+                                    <div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">
+                                        ${photoElement}
+                                        <div>
+                                            <h3>${item.user_name}</h3>
+                                            <p>${item.company || 'Sem empresa'}</p>
+                                        </div>
                                     </div>
                                 </div>
+                                <div class="no-data">
+                                    <p>Nenhum feedback cadastrado ainda</p>
+                                </div>
                             </div>
-                            <div class="no-data">
-                                <p>Nenhum feedback cadastrado ainda</p>
-                            </div>
-                        </div>
-                    `;
+                        `;
                 }
-                
+
                 const insights = item.insights;
                 const feedback = item.latest_feedback;
                 const cardId = `card-${index}`;
-                
+
                 const riskLabels = {
                     'baixo': 'Baixo',
                     'medio': 'Médio',
@@ -250,10 +255,10 @@ async function showDashboard() {
                     'medium': 'Médio',
                     'high': 'Alto'
                 };
-                
+
                 const riskLevel = insights.risco_saida?.nivel || insights.turnover_risk?.level || 'baixo';
                 const riskReason = insights.risco_saida?.motivo || insights.turnover_risk?.reason || '';
-                
+
                 return `
                     <div class="insight-card">
                         <div class="insight-header">
@@ -268,14 +273,14 @@ async function showDashboard() {
                                 ${new Date((feedback.feedback_date || feedback.created_at).replace(/-/g, '/')).toLocaleDateString('pt-BR')}
                             </div>
                         </div>
-                        
+
                         ${insights.resumo ? `
                             <div class="insight-section">
                                 <h4>📝 Resumo do Último Feedback</h4>
                                 <div class="feedback-summary">${insights.resumo}</div>
                             </div>
                         ` : ''}
-                        
+
                         <div class="insight-section">
                             <h4>⚠️ Risco de Saída</h4>
                             <p>
@@ -284,7 +289,7 @@ async function showDashboard() {
                                 </span>
                             </p>
                         </div>
-                        
+
                         ${insights.acoes_pendencias && insights.acoes_pendencias.length > 0 ? `
                             <div class="insight-section">
                                 <h4>🎯 Ações ou Pendências</h4>
@@ -298,11 +303,11 @@ async function showDashboard() {
                                 <p style="color: #94A3B8; font-size: 0.875rem;">Sem pendências</p>
                             </div>
                         `}
-                        
+
                         <div class="expand-btn" id="btn-${cardId}" onclick="toggleCard('${cardId}')">
                             Ver detalhes <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
                         </div>
-                        
+
                         <div class="card-expanded" id="expanded-${cardId}">
                             <div class="insight-section">
                                 <h4>💪 Fortalezas</h4>
@@ -310,14 +315,14 @@ async function showDashboard() {
                                     ${(insights.fortalezas || insights.strengths || []).map(s => `<li>${s}</li>`).join('')}
                                 </ul>
                             </div>
-                            
+
                             <div class="insight-section">
                                 <h4>📈 Pontos de Desenvolvimento</h4>
                                 <ul class="insight-list">
                                     ${(insights.pontos_desenvolvimento || insights.development_points || []).map(p => `<li>${p}</li>`).join('')}
                                 </ul>
                             </div>
-                            
+
                             <div class="insight-section">
                                 <h4>💡 Detalhes do Risco</h4>
                                 <p style="font-size: 0.875rem; color: #64748B;">
@@ -340,17 +345,17 @@ async function showDashboard() {
 async function showEmployees() {
     setActiveNav('employees');
     document.getElementById('employees-view').style.display = 'block';
-    
+
     const content = document.getElementById('employees-content');
     content.innerHTML = '<div class="loading">Carregando funcionários...</div>';
-    
+
     try {
         const response = await fetch('/api/employees', {
             credentials: 'include'
         });
-        
+
         const data = await response.json();
-        
+
         if (data.employees && data.employees.length > 0) {
             content.innerHTML = `
                 <div class="employees-table">
@@ -395,10 +400,10 @@ async function showEmployees() {
 async function showFeedbacks() {
     setActiveNav('feedbacks');
     document.getElementById('feedbacks-view').style.display = 'block';
-    
+
     const today = new Date().toISOString().split('T')[0];
     document.getElementById('feedback-date').value = today;
-    
+
     await loadEmployeeSelect();
 }
 
@@ -407,10 +412,10 @@ async function loadEmployeeSelect() {
         const response = await fetch('/api/employees', {
             credentials: 'include'
         });
-        
+
         const data = await response.json();
         const select = document.getElementById('feedback-employee');
-        
+
         select.innerHTML = '<option value="">Selecione...</option>' +
             data.employees.map(emp => 
                 `<option value="${emp.id}">${emp.name} (${emp.position || 'Sem cargo'})</option>`
@@ -450,12 +455,12 @@ async function saveNewEmployee() {
     const email = document.getElementById('new-emp-email').value;
     const position = document.getElementById('new-emp-position').value;
     const department = document.getElementById('new-emp-department').value;
-    
+
     if (!name || !email) {
         showToast('Nome e email são obrigatórios', 'warning');
         return;
     }
-    
+
     try {
         const response = await fetch('/api/employees', {
             method: 'POST',
@@ -463,9 +468,9 @@ async function saveNewEmployee() {
             credentials: 'include',
             body: JSON.stringify({ name, email, position, department })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             closeModal();
             showEmployees();
@@ -484,9 +489,9 @@ async function editEmployee(id) {
         const response = await fetch(`/api/employees/${id}`, {
             credentials: 'include'
         });
-        
+
         const emp = await response.json();
-        
+
         const modalBody = document.getElementById('modal-body');
         modalBody.innerHTML = `
             <h2>Editar Funcionário</h2>
@@ -519,7 +524,7 @@ async function saveEditEmployee(id) {
     const email = document.getElementById('edit-emp-email').value;
     const position = document.getElementById('edit-emp-position').value;
     const department = document.getElementById('edit-emp-department').value;
-    
+
     try {
         const response = await fetch(`/api/employees/${id}`, {
             method: 'PUT',
@@ -527,9 +532,9 @@ async function saveEditEmployee(id) {
             credentials: 'include',
             body: JSON.stringify({ name, email, position, department })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             closeModal();
             showEmployees();
@@ -546,15 +551,15 @@ async function saveEditEmployee(id) {
 async function deleteEmployee(id) {
     const confirmed = confirm('Tem certeza que deseja excluir este funcionário? Todos os feedbacks relacionados também serão excluídos.');
     if (!confirmed) return;
-    
+
     try {
         const response = await fetch(`/api/employees/${id}`, {
             method: 'DELETE',
             credentials: 'include'
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             showEmployees();
             showToast('Funcionário excluído', 'success');
@@ -574,16 +579,16 @@ async function submitFeedback() {
     const feedback_to_manager = document.getElementById('feedback-to-manager').value;
     const expectations_company = document.getElementById('expectations-company').value;
     const expectations_manager = document.getElementById('expectations-manager').value;
-    
+
     if (!user_id || !feedback_date || !feedback_to_user) {
         showToast('Preencha os campos obrigatórios (usuário, data e feedback)', 'warning');
         return;
     }
-    
+
     const button = event.target;
     button.disabled = true;
     button.textContent = 'Processando com IA...';
-    
+
     try {
         const response = await fetch('/api/feedbacks', {
             method: 'POST',
@@ -598,12 +603,12 @@ async function submitFeedback() {
                 expectations_manager
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             showToast('Feedback salvo e vetorizado com sucesso!', 'success');
-            
+
             document.getElementById('feedback-user').value = '';
             document.getElementById('feedback-to-employee').value = '';
             document.getElementById('feedback-to-manager').value = '';
@@ -626,10 +631,10 @@ async function submitFeedback() {
 async function showFeedbacks() {
     setActiveNav('feedbacks');
     document.getElementById('feedbacks-view').style.display = 'block';
-    
+
     const today = new Date().toISOString().split('T')[0];
     document.getElementById('feedback-date').value = today;
-    
+
     await loadManagedUsers();
 }
 
@@ -638,10 +643,10 @@ async function loadManagedUsers() {
         const response = await fetch('/api/managed-users', {
             credentials: 'include'
         });
-        
+
         const data = await response.json();
         const select = document.getElementById('feedback-user');
-        
+
         select.innerHTML = '<option value="">Selecione...</option>' +
             data.managed_users.map(user => 
                 `<option value="${user.id}">${user.name} (${user.company})</option>`
@@ -654,17 +659,17 @@ async function loadManagedUsers() {
 async function showAccount() {
     setActiveNav('account');
     document.getElementById('account-view').style.display = 'block';
-    
+
     document.getElementById('account-name').value = currentUser.name;
     document.getElementById('account-email').value = currentUser.email;
     document.getElementById('account-company').value = currentUser.company || '';
     document.getElementById('account-phone').value = currentUser.phone || '';
-    
+
     await loadAvailableManagers();
-    
+
     const managerSelect = document.getElementById('account-manager');
     managerSelect.value = currentUser.manager_id || '';
-    
+
     await loadUserPhoto();
 }
 
@@ -674,7 +679,7 @@ async function loadUserPhoto() {
             credentials: 'include'
         });
         const data = await response.json();
-        
+
         if (data.photo) {
             const preview = document.getElementById('photo-preview');
             preview.src = data.photo;
@@ -692,7 +697,7 @@ function previewPhoto(event) {
             showToast('Foto muito grande. Máximo 2MB', 'warning');
             return;
         }
-        
+
         const reader = new FileReader();
         reader.onload = function(e) {
             const preview = document.getElementById('photo-preview');
@@ -708,10 +713,10 @@ async function loadAvailableManagers() {
         const response = await fetch('/api/users', {
             credentials: 'include'
         });
-        
+
         const data = await response.json();
         const select = document.getElementById('account-manager');
-        
+
         select.innerHTML = '<option value="">Nenhum</option>' +
             data.users.map(user => 
                 `<option value="${user.id}">${user.name} (${user.company})</option>`
@@ -726,12 +731,12 @@ async function updateProfile() {
     const company = document.getElementById('account-company').value;
     const phone = document.getElementById('account-phone').value;
     const manager_id = document.getElementById('account-manager').value;
-    
+
     if (!name || !company) {
         showToast('Nome e empresa são obrigatórios', 'warning');
         return;
     }
-    
+
     try {
         const response = await fetch('/api/profile', {
             method: 'PUT',
@@ -744,9 +749,9 @@ async function updateProfile() {
                 manager_id: manager_id || null
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             const photoInput = document.getElementById('photo-input');
             if (photoInput.files.length > 0) {
@@ -794,7 +799,7 @@ window.onclick = function(event) {
 function toggleChat() {
     const chatWindow = document.getElementById('chat-window');
     const chatButton = document.getElementById('chat-button');
-    
+
     if (chatWindow.style.display === 'none') {
         chatWindow.style.display = 'flex';
         chatButton.style.display = 'none';
@@ -809,18 +814,18 @@ let selectedUserForFeedback = null;
 async function loadUserLastFeedback() {
     const userId = document.getElementById('feedback-user').value;
     selectedUserForFeedback = userId;
-    
+
     if (!userId) {
         document.getElementById('last-feedback-info').style.display = 'none';
         return;
     }
-    
+
     try {
         const response = await fetch(`/api/user/${userId}/feedbacks`, {
             credentials: 'include'
         });
         const data = await response.json();
-        
+
         if (data.feedbacks && data.feedbacks.length > 0) {
             const lastFeedback = data.feedbacks[0];
             const feedbackDate = new Date(lastFeedback.feedback_date.replace(/-/g, '/')).toLocaleDateString('pt-BR');
@@ -836,21 +841,21 @@ async function loadUserLastFeedback() {
 
 async function showFeedbackHistory() {
     if (!selectedUserForFeedback) return;
-    
+
     try {
         const response = await fetch(`/api/user/${selectedUserForFeedback}/feedbacks`, {
             credentials: 'include'
         });
         const data = await response.json();
-        
+
         if (!data.feedbacks || data.feedbacks.length === 0) {
             showToast('Nenhum feedback anterior encontrado', 'info');
             return;
         }
-        
+
         const userSelect = document.getElementById('feedback-user');
         const userName = userSelect.options[userSelect.selectedIndex].text.split(' (')[0];
-        
+
         const modalBody = document.getElementById('modal-body');
         modalBody.innerHTML = `
             <h3>Histórico de Feedbacks - ${userName}</h3>
@@ -871,7 +876,7 @@ async function showFeedbackHistory() {
                 `).join('')}
             </div>
         `;
-        
+
         document.getElementById('modal').style.display = 'flex';
     } catch (error) {
         console.error('Failed to load feedback history:', error);
@@ -885,24 +890,24 @@ async function editFeedback(feedbackId) {
             credentials: 'include'
         });
         const data = await response.json();
-        
+
         const feedback = data.feedbacks.find(f => f.id === feedbackId);
         if (!feedback) return;
-        
+
         closeModal();
-        
+
         document.getElementById('feedback-to-employee').value = feedback.feedback_to_user;
         document.getElementById('feedback-to-manager').value = feedback.feedback_to_manager || '';
         document.getElementById('expectations-company').value = feedback.expectations_company || '';
         document.getElementById('expectations-manager').value = feedback.expectations_manager || '';
         document.getElementById('feedback-date').value = feedback.feedback_date;
-        
+
         const submitButton = document.querySelector('#feedbacks-view button.btn-primary');
         submitButton.textContent = 'Atualizar Feedback';
         submitButton.onclick = async function() {
             await updateFeedbackSubmit(feedbackId);
         };
-        
+
         showToast('Feedback carregado para edição', 'info');
     } catch (error) {
         console.error('Failed to edit feedback:', error);
@@ -916,16 +921,16 @@ async function updateFeedbackSubmit(feedbackId) {
     const expectations_company = document.getElementById('expectations-company').value;
     const expectations_manager = document.getElementById('expectations-manager').value;
     const feedback_date = document.getElementById('feedback-date').value;
-    
+
     if (!feedback_date || !feedback_to_user) {
         showToast('Data e feedback ao usuário são obrigatórios', 'warning');
         return;
     }
-    
+
     const button = event.target;
     button.disabled = true;
     button.textContent = 'Atualizando...';
-    
+
     try {
         const response = await fetch(`/api/feedbacks/${feedbackId}`, {
             method: 'PUT',
@@ -939,19 +944,19 @@ async function updateFeedbackSubmit(feedbackId) {
                 feedback_date
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (data.success) {
             showToast('Feedback atualizado com sucesso!', 'success');
-            
+
             document.getElementById('feedback-to-employee').value = '';
             document.getElementById('feedback-to-manager').value = '';
             document.getElementById('expectations-company').value = '';
             document.getElementById('expectations-manager').value = '';
             const today = new Date().toISOString().split('T')[0];
             document.getElementById('feedback-date').value = today;
-            
+
             button.textContent = 'Salvar Feedback com IA';
             button.onclick = submitFeedback;
         } else {
@@ -971,7 +976,7 @@ async function loadUserAvatarAsync(userId) {
             credentials: 'include'
         });
         const data = await response.json();
-        
+
         const avatarElement = document.getElementById(`avatar-${userId}`);
         if (avatarElement && data.photo) {
             const img = document.createElement('img');
@@ -988,25 +993,25 @@ async function loadUserAvatarAsync(userId) {
 async function sendChatMessage() {
     const input = document.getElementById('chat-input');
     const question = input.value.trim();
-    
+
     if (!question) return;
-    
+
     const messagesContainer = document.getElementById('chat-messages');
-    
+
     const userMessage = document.createElement('div');
     userMessage.className = 'chat-message user-message';
     userMessage.textContent = question;
     messagesContainer.appendChild(userMessage);
-    
+
     input.value = '';
-    
+
     const typingIndicator = document.createElement('div');
     typingIndicator.className = 'chat-typing bot-message';
     typingIndicator.innerHTML = '<span></span><span></span><span></span>';
     messagesContainer.appendChild(typingIndicator);
-    
+
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    
+
     try {
         const response = await fetch('/api/chat', {
             method: 'POST',
@@ -1014,27 +1019,27 @@ async function sendChatMessage() {
             credentials: 'include',
             body: JSON.stringify({ question })
         });
-        
+
         const data = await response.json();
-        
+
         messagesContainer.removeChild(typingIndicator);
-        
+
         const botMessage = document.createElement('div');
         botMessage.className = 'chat-message bot-message';
         botMessage.textContent = data.answer || data.error || 'Desculpe, ocorreu um erro.';
         messagesContainer.appendChild(botMessage);
-        
+
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        
+
     } catch (error) {
         console.error('Chat error:', error);
         messagesContainer.removeChild(typingIndicator);
-        
+
         const errorMessage = document.createElement('div');
         errorMessage.className = 'chat-message bot-message';
         errorMessage.textContent = 'Desculpe, não consegui processar sua pergunta. Tente novamente.';
         messagesContainer.appendChild(errorMessage);
-        
+
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
 }
