@@ -66,6 +66,30 @@ def init_db():
         """))
         conn.commit()
         
+        # Tabela de cache de insights
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS insights (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                manager_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                insight_data TEXT NOT NULL,
+                generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                source_feedback_timestamp TIMESTAMP NOT NULL,
+                UNIQUE(user_id, manager_id)
+            )
+        """))
+        conn.commit()
+        
+        # Adicionar coluna profile_photo se não existir
+        try:
+            conn.execute(text("""
+                ALTER TABLE users 
+                ADD COLUMN IF NOT EXISTS profile_photo BYTEA
+            """))
+            conn.commit()
+        except Exception as e:
+            print(f"Migration note: {e}")
+        
         try:
             conn.execute(text("""
                 ALTER TABLE feedbacks 
