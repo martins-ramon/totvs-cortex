@@ -208,131 +208,26 @@ async function showDashboard() {
     document.getElementById('dashboard-view').style.display = 'block';
 
     const content = document.getElementById('dashboard-content');
-    content.innerHTML = '<div class="loading">Carregando insights...</div>';
+    content.innerHTML = '<div class="loading">Carregando usuários...</div>';
 
     try {
+        // Buscar lista de usuários gerenciados
         const response = await fetch('/api/dashboard', {
             credentials: 'include'
         });
 
         const data = await response.json();
 
-        if (data.dashboard && data.dashboard.length > 0) {
-            content.innerHTML = data.dashboard.map((item, index) => {
-                const userInitial = item.user_name.charAt(0).toUpperCase();
-                const photoElement = `<div class="user-avatar-placeholder" id="avatar-${item.user_id}">${userInitial}</div>`;
-
-                loadUserAvatarAsync(item.user_id);
-
-                if (!item.latest_feedback) {
-                    return `
-                            <div class="insight-card">
-                                <div class="insight-header">
-                                    <div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">
-                                        ${photoElement}
-                                        <div>
-                                            <h3>${item.user_name}</h3>
-                                            <p>${item.company || 'Sem empresa'}</p>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="no-data">
-                                    <p>Nenhum feedback cadastrado ainda</p>
-                                </div>
-                            </div>
-                        `;
-                }
-
-                const insights = item.insights;
-                const feedback = item.latest_feedback;
-                const cardId = `card-${index}`;
-
-                const riskLabels = {
-                    'baixo': 'Baixo',
-                    'medio': 'Médio',
-                    'alto': 'Alto',
-                    'low': 'Baixo',
-                    'medium': 'Médio',
-                    'high': 'Alto'
-                };
-
-                const riskLevel = insights.risco_saida?.nivel || insights.turnover_risk?.level || 'baixo';
-                const riskReason = insights.risco_saida?.motivo || insights.turnover_risk?.reason || '';
-
-                return `
-                    <div class="insight-card">
-                        <div class="insight-header">
-                            <div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">
-                                ${photoElement}
-                                <div>
-                                    <h3>${item.user_name}</h3>
-                                    <p>${item.company || 'Sem empresa'}</p>
-                                </div>
-                            </div>
-                            <div class="feedback-date">
-                                ${new Date((feedback.feedback_date || feedback.created_at).replace(/-/g, '/')).toLocaleDateString('pt-BR')}
-                            </div>
-                        </div>
-
-                        ${insights.resumo ? `
-                            <div class="insight-section">
-                                <h4>📝 Resumo do Último Feedback</h4>
-                                <div class="feedback-summary">${insights.resumo}</div>
-                            </div>
-                        ` : ''}
-
-                        <div class="insight-section">
-                            <h4>⚠️ Risco de Saída</h4>
-                            <p>
-                                <span class="risk-badge risk-${riskLevel.toLowerCase().replace('é', 'e')}">
-                                    ${riskLabels[riskLevel.toLowerCase()] || riskLabels['baixo']}
-                                </span>
-                            </p>
-                        </div>
-
-                        ${insights.acoes_pendencias && insights.acoes_pendencias.length > 0 ? `
-                            <div class="insight-section">
-                                <h4>🎯 Ações ou Pendências</h4>
-                                ${insights.acoes_pendencias.map(action => 
-                                    `<div class="action-badge">${action}</div>`
-                                ).join('')}
-                            </div>
-                        ` : `
-                            <div class="insight-section">
-                                <h4>🎯 Ações ou Pendências</h4>
-                                <p style="color: #94A3B8; font-size: 0.875rem;">Sem pendências</p>
-                            </div>
-                        `}
-
-                        <div class="expand-btn" id="btn-${cardId}" onclick="toggleCard('${cardId}')">
-                            Ver detalhes <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
-                        </div>
-
-                        <div class="card-expanded" id="expanded-${cardId}">
-                            <div class="insight-section">
-                                <h4>💪 Fortalezas</h4>
-                                <ul class="insight-list">
-                                    ${(insights.fortalezas || insights.strengths || []).map(s => `<li>${s}</li>`).join('')}
-                                </ul>
-                            </div>
-
-                            <div class="insight-section">
-                                <h4>📈 Pontos de Desenvolvimento</h4>
-                                <ul class="insight-list">
-                                    ${(insights.pontos_desenvolvimento || insights.development_points || []).map(p => `<li>${p}</li>`).join('')}
-                                </ul>
-                            </div>
-
-                            <div class="insight-section">
-                                <h4>💡 Detalhes do Risco</h4>
-                                <p style="font-size: 0.875rem; color: #64748B;">
-                                    ${riskReason}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                `;
+        if (data.users && data.users.length > 0) {
+            // Renderizar skeletons imediatamente
+            content.innerHTML = data.users.map((user, index) => {
+                return createSkeletonCard(user.user_id, index);
             }).join('');
+
+            // Carregar insights de cada usuário assincronamente
+            data.users.forEach((user, index) => {
+                loadUserInsights(user.user_id, index);
+            });
         } else {
             content.innerHTML = '<div class="no-data"><p>Nenhum usuário gerenciado. Os usuários devem te selecionar como gestor no perfil deles!</p></div>';
         }
@@ -340,6 +235,170 @@ async function showDashboard() {
         console.error('Failed to load dashboard:', error);
         content.innerHTML = '<div class="no-data"><p>Erro ao carregar dashboard</p></div>';
     }
+}
+
+function createSkeletonCard(userId, index) {
+    return `
+        <div class="skeleton-card" id="card-container-${userId}">
+            <div class="skeleton-header">
+                <div class="skeleton-avatar"></div>
+                <div class="skeleton-text">
+                    <div class="skeleton-line short"></div>
+                    <div class="skeleton-line medium"></div>
+                </div>
+            </div>
+            <div class="skeleton-content">
+                <div class="skeleton-line long"></div>
+                <div class="skeleton-line long"></div>
+                <div class="skeleton-line medium"></div>
+            </div>
+        </div>
+    `;
+}
+
+async function loadUserInsights(userId, index) {
+    try {
+        const response = await fetch(`/api/user/${userId}/insights`, {
+            credentials: 'include'
+        });
+
+        const data = await response.json();
+
+        // Substituir skeleton pelo card real
+        const container = document.getElementById(`card-container-${userId}`);
+        if (container) {
+            container.outerHTML = renderUserCard(data, index);
+            
+            // Carregar foto assincronamente
+            loadUserAvatarAsync(userId);
+        }
+    } catch (error) {
+        console.error(`Failed to load insights for user ${userId}:`, error);
+        const container = document.getElementById(`card-container-${userId}`);
+        if (container) {
+            container.outerHTML = `
+                <div class="insight-card">
+                    <div class="no-data">
+                        <p>Erro ao carregar insights</p>
+                    </div>
+                </div>
+            `;
+        }
+    }
+}
+
+function renderUserCard(item, index) {
+    const userInitial = item.user_name.charAt(0).toUpperCase();
+    const photoElement = `<div class="user-avatar-placeholder" id="avatar-${item.user_id}">${userInitial}</div>`;
+
+    if (!item.latest_feedback) {
+        return `
+            <div class="insight-card" id="card-container-${item.user_id}">
+                <div class="insight-header">
+                    <div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">
+                        ${photoElement}
+                        <div>
+                            <h3>${item.user_name}</h3>
+                            <p>${item.company || 'Sem empresa'}</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="no-data">
+                    <p>Nenhum feedback cadastrado ainda</p>
+                </div>
+            </div>
+        `;
+    }
+
+    const insights = item.insights;
+    const feedback = item.latest_feedback;
+    const cardId = `card-${item.user_id}`;
+
+    const riskLabels = {
+        'baixo': 'Baixo',
+        'medio': 'Médio',
+        'alto': 'Alto',
+        'low': 'Baixo',
+        'medium': 'Médio',
+        'high': 'Alto'
+    };
+
+    const riskLevel = insights.risco_saida?.nivel || insights.turnover_risk?.level || 'baixo';
+    const riskReason = insights.risco_saida?.motivo || insights.turnover_risk?.reason || '';
+
+    return `
+        <div class="insight-card" id="card-container-${item.user_id}">
+            <div class="insight-header">
+                <div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">
+                    ${photoElement}
+                    <div>
+                        <h3>${item.user_name}</h3>
+                        <p>${item.company || 'Sem empresa'}</p>
+                    </div>
+                </div>
+                <div class="feedback-date">
+                    ${new Date((feedback.feedback_date || feedback.created_at).replace(/-/g, '/')).toLocaleDateString('pt-BR')}
+                </div>
+            </div>
+
+            ${insights.resumo ? `
+                <div class="insight-section">
+                    <h4>📝 Resumo do Último Feedback</h4>
+                    <div class="feedback-summary">${insights.resumo}</div>
+                </div>
+            ` : ''}
+
+            <div class="insight-section">
+                <h4>⚠️ Risco de Saída</h4>
+                <p>
+                    <span class="risk-badge risk-${riskLevel.toLowerCase().replace('é', 'e')}">
+                        ${riskLabels[riskLevel.toLowerCase()] || riskLabels['baixo']}
+                    </span>
+                </p>
+            </div>
+
+            ${insights.acoes_pendencias && insights.acoes_pendencias.length > 0 ? `
+                <div class="insight-section">
+                    <h4>🎯 Ações ou Pendências</h4>
+                    ${insights.acoes_pendencias.map(action => 
+                        `<div class="action-badge">${action}</div>`
+                    ).join('')}
+                </div>
+            ` : `
+                <div class="insight-section">
+                    <h4>🎯 Ações ou Pendências</h4>
+                    <p style="color: #94A3B8; font-size: 0.875rem;">Sem pendências</p>
+                </div>
+            `}
+
+            <div class="expand-btn" id="btn-${cardId}" onclick="toggleCard('${cardId}')">
+                Ver detalhes <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+            </div>
+
+            <div class="card-expanded" id="expanded-${cardId}">
+                <div class="insight-section">
+                    <h4>💪 Fortalezas</h4>
+                    <ul class="insight-list">
+                        ${(insights.fortalezas || insights.strengths || []).map(s => `<li>${s}</li>`).join('')}
+                    </ul>
+                </div>
+
+                <div class="insight-section">
+                    <h4>📈 Pontos de Desenvolvimento</h4>
+                    <ul class="insight-list">
+                        ${(insights.pontos_desenvolvimento || insights.development_points || []).map(p => `<li>${p}</li>`).join('')}
+                    </ul>
+                </div>
+
+                <div class="insight-section">
+                    <h4>💡 Detalhes do Risco</h4>
+                    <p style="font-size: 0.875rem; color: #64748B;">
+                        ${riskReason}
+                    </p>
+                </div>
+            </div>
+        </div>
+    `;
 }
 
 async function showEmployees() {
