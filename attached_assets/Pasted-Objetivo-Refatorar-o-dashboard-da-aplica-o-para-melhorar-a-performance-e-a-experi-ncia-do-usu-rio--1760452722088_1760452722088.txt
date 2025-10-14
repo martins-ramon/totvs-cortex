@@ -1,0 +1,50 @@
+Objetivo: Refatorar o dashboard da aplicação para melhorar a performance e a experiência do usuário, implementando carregamento assíncrono para os cards e um sistema de cache para os insights gerados.
+
+Contexto Atual:
+O dashboard atual carrega os cards de todos os funcionários de um gestor de forma síncrona. Isso significa que a página só é exibida quando o processamento de todos os cards está concluído, resultando em lentidão e uma má experiência de usuário, especialmente para gestores com muitas pessoas no time.
+
+Requisitos Detalhados:
+
+1. Backend: Implementação do Sistema de Cache
+
+1.1. Crie uma nova tabela no banco de dados chamada insights com a seguinte estrutura sugerida:
+
+id: Chave primária (ex: UUID ou SERIAL).
+
+employee_id: ID do funcionário (chave estrangeira).
+
+manager_id: ID do gestor (para facilitar consultas).
+
+insight_data: Coluna para armazenar os dados do card (formato JSON ou TEXT).
+
+generated_at: Timestamp de quando o insight foi gerado e salvo.
+
+source_feedback_timestamp: Timestamp do último feedback que serviu como base para gerar o insight.
+
+1.2. Altere a lógica da API que retorna os dados do dashboard. Para cada funcionário vinculado ao gestor logado, a lógica deve ser a seguinte:
+
+Verificação: Busque o timestamp do último feedback dado para o funcionário X.
+
+Consulta ao Cache: Verifique se existe um registro na tabela insights para o funcionário X onde o generated_at é mais recente que o timestamp do último feedback.
+
+Se SIM (Cache Válido): Retorne os dados da coluna insight_data diretamente da tabela insights.
+
+Se NÃO (Cache Inválido ou Inexistente):
+
+Execute a função atual de processamento para gerar novos insights para o funcionário X.
+
+Salve o resultado na tabela insights, preenchendo todas as colunas (employee_id, insight_data, generated_at, etc.).
+
+Retorne os insights recém-gerados.
+
+2. Frontend: Carregamento Assíncrono dos Cards
+
+2.1. Carregamento da Página: O container principal do dashboard deve carregar imediatamente, sem esperar pelos dados dos cards.
+
+2.2. Placeholders: No lugar de cada card, exiba um componente de "loading" (esqueleto de UI ou spinner) para indicar que o conteúdo está sendo preparado.
+
+2.3. Requisições Individuais: Para cada funcionário na lista, faça uma chamada de API assíncrona e individual para buscar os dados do seu respectivo card (usando a lógica de backend descrita no item 1.2).
+
+2.4. Renderização Dinâmica: Assim que a requisição para um funcionário for concluída, substitua o placeholder correspondente pelo card com os dados recebidos. Isso garantirá que os cards mais rápidos de processar apareçam primeiro, melhorando a responsividade percebida pelo usuário.
+
+Resumo da tarefa: Por favor, ajuste o código da aplicação para implementar as mudanças de backend (criação da tabela insights e nova lógica de API) e frontend (carregamento assíncrono com placeholders) conforme os requisitos detalhados acima.

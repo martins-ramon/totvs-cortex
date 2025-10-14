@@ -463,6 +463,7 @@ def feedbacks():
 
 @app.route('/api/dashboard', methods=['GET'])
 def dashboard():
+    """Retorna apenas a lista de usuários gerenciados (sem insights) para carregamento assíncrono"""
     if 'user_id' not in session:
         return jsonify({"error": "Unauthorized"}), 401
     
@@ -471,74 +472,180 @@ def dashboard():
     try:
         result = db.execute(
             text("""
-                SELECT u.id, u.name, u.company, u.phone,
-                       f.feedback_to_user, f.feedback_to_manager, 
-                       f.expectations_company, f.expectations_manager, f.feedback_date, f.created_at
+                SELECT u.id, u.name, u.company, u.phone
                 FROM users u
-                LEFT JOIN LATERAL (
-                    SELECT * FROM feedbacks 
-                    WHERE user_id = u.id 
-                    ORDER BY feedback_date DESC, created_at DESC 
-                    LIMIT 1
-                ) f ON true
                 WHERE u.manager_id = :manager_id
-                ORDER BY f.feedback_date DESC NULLS LAST, f.created_at DESC NULLS LAST
+                ORDER BY u.name
             """),
             {"manager_id": session['user_id']}
         )
         
-        dashboard_data = []
-        
-        for row in result.fetchall():
-            user_data = {
+        users = [
+            {
                 "user_id": row[0],
                 "user_name": row[1],
                 "company": row[2],
-                "phone": row[3],
+                "phone": row[3]
+            }
+            for row in result.fetchall()
+        ]
+        
+        return jsonify({"users": users})
+    finally:
+        db.close()
+
+@app.route('/api/user/<int:user_id>/insights', methods=['GET'])
+def user_insights(user_id):
+    """Endpoint individual para buscar insights de um usuário com sistema de cache"""
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    manager_id = session['user_id']
+    db = SessionLocal()
+    
+    try:
+        # Verificar se o usuário é gerenciado pelo manager logado
+        user_check = db.execute(
+            text("SELECT id, name, company, phone FROM users WHERE id = :user_id AND manager_id = :manager_id"),
+            {"user_id": user_id, "manager_id": manager_id}
+        ).fetchone()
+        
+        if not user_check:
+            return jsonify({"error": "User not found or not managed by you"}), 404
+        
+        # Buscar o timestamp do último feedback
+        last_feedback_result = db.execute(
+            text("""
+                SELECT feedback_to_user, feedback_to_manager, expectations_company, 
+                       expectations_manager, feedback_date, created_at
+                FROM feedbacks
+                WHERE user_id = :user_id AND author_id = :manager_id
+                ORDER BY feedback_date DESC, created_at DESC
+                LIMIT 1
+            """),
+            {"user_id": user_id, "manager_id": manager_id}
+        ).fetchone()
+        
+        if not last_feedback_result:
+            return jsonify({
+                "user_id": user_id,
+                "user_name": user_check[1],
+                "company": user_check[2],
+                "phone": user_check[3],
                 "latest_feedback": None,
                 "insights": None
+            })
+        
+        last_feedback_timestamp = last_feedback_result[5]  # created_at
+        
+        # Verificar cache válido
+        cache_result = db.execute(
+            text("""
+                SELECT insight_data, generated_at
+                FROM insights
+                WHERE user_id = :user_id AND manager_id = :manager_id 
+                AND generated_at >= :last_feedback_timestamp
+                ORDER BY generated_at DESC
+                LIMIT 1
+            """),
+            {"user_id": user_id, "manager_id": manager_id, "last_feedback_timestamp": last_feedback_timestamp}
+        ).fetchone()
+        
+        if cache_result:
+            # Cache válido - retornar do cache
+            import json
+            cached_insights = json.loads(cache_result[0])
+            
+            latest_feedback = {
+                "feedback_to_user": last_feedback_result[0],
+                "feedback_to_manager": last_feedback_result[1],
+                "expectations_company": last_feedback_result[2],
+                "expectations_manager": last_feedback_result[3],
+                "feedback_date": last_feedback_result[4].isoformat() if last_feedback_result[4] else None,
+                "created_at": last_feedback_result[5].isoformat() if last_feedback_result[5] else None
             }
             
-            if row[4]:
-                latest_feedback = {
-                    "feedback_to_user": row[4],
-                    "feedback_to_manager": row[5],
-                    "expectations_company": row[6],
-                    "expectations_manager": row[7],
-                    "feedback_date": row[8].isoformat() if row[8] else None,
-                    "created_at": row[9].isoformat() if row[9] else None
-                }
-                user_data["latest_feedback"] = latest_feedback
-                
-                all_feedbacks_result = db.execute(
-                    text("""
-                        SELECT feedback_to_user, feedback_to_manager, 
-                               expectations_company, expectations_manager, feedback_date, created_at
-                        FROM feedbacks
-                        WHERE user_id = :user_id
-                        ORDER BY feedback_date DESC, created_at DESC
-                    """),
-                    {"user_id": row[0]}
-                )
-                
-                all_feedbacks = [
-                    {
-                        "feedback_to_user": fb[0],
-                        "feedback_to_manager": fb[1],
-                        "expectations_company": fb[2],
-                        "expectations_manager": fb[3],
-                        "feedback_date": fb[4].isoformat() if fb[4] else None,
-                        "created_at": fb[5].isoformat() if fb[5] else None
-                    }
-                    for fb in all_feedbacks_result.fetchall()
-                ]
-                
-                insights = generate_insights(row[1], latest_feedback, all_feedbacks)
-                user_data["insights"] = insights
-            
-            dashboard_data.append(user_data)
+            return jsonify({
+                "user_id": user_id,
+                "user_name": user_check[1],
+                "company": user_check[2],
+                "phone": user_check[3],
+                "latest_feedback": latest_feedback,
+                "insights": cached_insights,
+                "cached": True
+            })
         
-        return jsonify({"dashboard": dashboard_data})
+        # Cache inválido ou inexistente - gerar novos insights
+        latest_feedback = {
+            "feedback_to_user": last_feedback_result[0],
+            "feedback_to_manager": last_feedback_result[1],
+            "expectations_company": last_feedback_result[2],
+            "expectations_manager": last_feedback_result[3],
+            "feedback_date": last_feedback_result[4].isoformat() if last_feedback_result[4] else None,
+            "created_at": last_feedback_result[5].isoformat() if last_feedback_result[5] else None
+        }
+        
+        # Buscar todos os feedbacks para contexto
+        all_feedbacks_result = db.execute(
+            text("""
+                SELECT feedback_to_user, feedback_to_manager, 
+                       expectations_company, expectations_manager, feedback_date, created_at
+                FROM feedbacks
+                WHERE user_id = :user_id AND author_id = :manager_id
+                ORDER BY feedback_date DESC, created_at DESC
+            """),
+            {"user_id": user_id, "manager_id": manager_id}
+        )
+        
+        all_feedbacks = [
+            {
+                "feedback_to_user": fb[0],
+                "feedback_to_manager": fb[1],
+                "expectations_company": fb[2],
+                "expectations_manager": fb[3],
+                "feedback_date": fb[4].isoformat() if fb[4] else None,
+                "created_at": fb[5].isoformat() if fb[5] else None
+            }
+            for fb in all_feedbacks_result.fetchall()
+        ]
+        
+        # Gerar insights
+        insights = generate_insights(user_check[1], latest_feedback, all_feedbacks)
+        
+        # Salvar no cache
+        import json
+        db.execute(
+            text("""
+                INSERT INTO insights (user_id, manager_id, insight_data, source_feedback_timestamp)
+                VALUES (:user_id, :manager_id, :insight_data, :source_feedback_timestamp)
+                ON CONFLICT (user_id, manager_id) 
+                DO UPDATE SET 
+                    insight_data = :insight_data,
+                    generated_at = CURRENT_TIMESTAMP,
+                    source_feedback_timestamp = :source_feedback_timestamp
+            """),
+            {
+                "user_id": user_id,
+                "manager_id": manager_id,
+                "insight_data": json.dumps(insights, ensure_ascii=False),
+                "source_feedback_timestamp": last_feedback_timestamp
+            }
+        )
+        db.commit()
+        
+        return jsonify({
+            "user_id": user_id,
+            "user_name": user_check[1],
+            "company": user_check[2],
+            "phone": user_check[3],
+            "latest_feedback": latest_feedback,
+            "insights": insights,
+            "cached": False
+        })
+        
+    except Exception as e:
+        print(f"Error generating insights: {e}")
+        return jsonify({"error": str(e)}), 500
     finally:
         db.close()
 
