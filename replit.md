@@ -186,7 +186,8 @@ Sistema revolucionário de feedback com modelo self-service onde usuários se ca
 
 ### Configuração
 - **Target**: autoscale (ideal para websites stateless)
-- **Comando**: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 4 --timeout 120`
+- **Comando**: `gunicorn app:app --bind 0.0.0.0:5000 --workers 4 --timeout 120`
+- **Porta**: 5000 (Replit mapeia automaticamente para porta externa)
 - **Workers**: 4 processos paralelos
 - **Timeout**: 120s (adequado para geração de insights com IA)
 

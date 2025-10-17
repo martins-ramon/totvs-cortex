@@ -52,4 +52,4 @@ externalPort = 3002
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["gunicorn", "app:app", "--bind", "0.0.0.0:$PORT", "--workers", "4", "--timeout", "120"]
+run = ["gunicorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "120"]
