@@ -76,14 +76,19 @@ Sistema revolucionário de feedback com modelo self-service onde usuários se ca
 
 ```
 /
-├── app.py                      # Backend Flask principal
-├── static/
-│   ├── index.html             # Interface principal
-│   ├── styles.css             # Estilos visuais
-│   └── app.js                 # Lógica frontend
-├── README.md                   # Documentação geral
-├── SETUP_INSTRUCTIONS.md      # Instruções de configuração
-└── replit.md                  # Este arquivo
+├── app.py                      # Ponto de entrada, cria a app Flask
+├── routes.py                   # Contém todas as rotas da API
+├── services.py                 # Lógica de negócio e chamadas para OpenAI
+├── database.py                 # Configuração do banco de dados e schemas
+└── static/
+    ├── login.html              # Página de Login e Registro
+    ├── index.html              # SPA principal (para usuários logados)
+    ├── css/
+    │   ├── base.css            # Estilos globais, layout, formulários
+    │   └── components.css      # Estilos de componentes (cards, modals, etc)
+    └── js/
+        ├── auth.js             # Lógica da página de login
+        └── app.js              # Lógica da aplicação principal
 ```
 
 ## 🔐 Variáveis de Ambiente Necessárias
@@ -176,6 +181,39 @@ Sistema revolucionário de feedback com modelo self-service onde usuários se ca
 - **Comando**: `python app.py`
 - **Porta**: 5000
 - **Tipo**: webview
+
+## 🚀 Deployment (Produção)
+
+### Configuração
+- **Target**: autoscale (ideal para websites stateless)
+- **Comando**: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 4 --timeout 120`
+- **Workers**: 4 processos paralelos
+- **Timeout**: 120s (adequado para geração de insights com IA)
+
+### Estrutura do app.py
+```python
+# Factory pattern para organização
+def create_app():
+    app = Flask(__name__)
+    # ... configurações
+    return app
+
+# Expõe app no nível do módulo para Gunicorn
+app = create_app()
+
+# Inicializa banco (produção + desenvolvimento)
+init_db()
+
+# Servidor de desenvolvimento
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
+```
+
+### Importante
+- ✅ Variável `app` exposta no nível do módulo (compatível com Gunicorn)
+- ✅ `init_db()` chamado automaticamente em produção
+- ✅ Tabelas criadas automaticamente no primeiro deploy
+- ✅ Testado localmente com Gunicorn antes do deploy
 
 ## 📝 Convenções de Código
 
