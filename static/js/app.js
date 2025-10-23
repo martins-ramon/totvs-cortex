@@ -1128,6 +1128,9 @@ async function sendChatMessage() {
             body: JSON.stringify({ question })
         });
         const data = await response.json();
+
+        console.log('Resposta recebida do /api/chat:', data);
+        
         document.getElementById('typing-indicator').remove();
         messagesContainer.innerHTML += `<div class="chat-message bot-message">${data.output || data.error || 'Desculpe, ocorreu um erro.'}</div>`;
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
