@@ -40,7 +40,6 @@ def init_db():
             )"""))
         conn.commit()
 
-        # ✅ ALTERAÇÃO: Coluna 'embedding' removida de 'meetings'
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS meetings (
                 id SERIAL PRIMARY KEY,
@@ -52,7 +51,6 @@ def init_db():
             )"""))
         conn.commit()
 
-        # ✅ NOVO: Tabela para armazenar os chunks e seus embeddings
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS meeting_chunks (
                 id SERIAL PRIMARY KEY,
@@ -63,12 +61,33 @@ def init_db():
             )"""))
         conn.commit()
 
-        # Comando para remover a coluna antiga caso a tabela 'meetings' já exista
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS meeting_access (
+                id SERIAL PRIMARY KEY,
+                meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(meeting_id, user_id)
+            )"""))
+        conn.commit()
+
         try:
             conn.execute(text("ALTER TABLE meetings DROP COLUMN embedding"))
             conn.commit()
             print("Coluna 'embedding' removida da tabela 'meetings'.")
         except Exception as e:
-            # Ignora o erro se a coluna não existir
             conn.rollback()
             print("Coluna 'embedding' não encontrada em 'meetings' ou já removida.")
+
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                title VARCHAR(255) NOT NULL,
+                message TEXT,
+                link VARCHAR(255),
+                is_read BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            )"""))
+        conn.commit()

@@ -96,3 +96,14 @@ def create_chat_response(question: str, context: str):
         temperature=0.7, max_tokens=500
     )
     return chat_response.choices[0].message.content
+
+def generate_meeting_summary(transcription: str) -> str:
+    """Gera um resumo com IA para uma transcrição de reunião."""
+    client = OpenAI()
+    prompt = f"Resuma de forma objetiva e estruturada a reunião a seguir:\n\n{transcription}"
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.4,
+    )
+    return response.choices[0].message.content.strip()

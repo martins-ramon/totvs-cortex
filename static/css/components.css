@@ -162,3 +162,216 @@
 .chat-typing span:nth-child(2) { animation-delay: 0.2s; }
 .chat-typing span:nth-child(3) { animation-delay: 0.4s; }
 @keyframes typing { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-10px); } }
+
+/* --- NOVO: Componente Autocomplete / Token Input --- */
+.autocomplete-wrapper {
+  position: relative; /* garante que a lista será posicionada dentro deste container */
+  width: 100%;
+}
+
+.autocomplete-list {
+  position: absolute;
+  top: 100%; /* aparece logo abaixo do input */
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 1000;
+  width: 100%; /* limita à largura do campo */
+}
+
+.autocomplete-item {
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  font-size: 0.95rem;
+  color: #1E293B;
+  transition: background 0.2s ease;
+}
+
+.autocomplete-item:hover {
+  background: #F1F5F9;
+}
+
+.autocomplete-item strong {
+  color: #6366F1;
+}
+
+.autocomplete-list:empty {
+  display: none;
+}
+
+.autocomplete-container {
+    position: relative;
+    width: 100%;
+    background-color: white;
+    border: 2px solid #E2E8F0;
+    border-radius: 8px;
+    padding: 0.25rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.3s ease;
+}
+.autocomplete-container:focus-within {
+    border-color: #6366F1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+.autocomplete-input {
+    flex: 1;
+    border: none;
+    outline: none;
+    padding: 0.5rem;
+    font-size: 1rem;
+    font-family: inherit;
+    min-width: 150px;
+}
+.autocomplete-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+    max-height: 250px;
+    overflow-y: auto;
+    z-index: 1001; /* Acima dos modals */
+    margin-top: 0.5rem;
+}
+.suggestion-item {
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+.suggestion-item:hover, .suggestion-item.highlighted {
+    background-color: #F1F5F9;
+}
+.suggestion-item small {
+    color: #64748B;
+    margin-left: 0.5rem;
+}
+.token {
+    display: inline-flex;
+    align-items: center;
+    background-color: #E0E7FF;
+    color: #4338CA;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+.token-remove {
+    margin-left: 0.5rem;
+    cursor: pointer;
+    font-weight: bold;
+    color: #4338CA;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+}
+.token-remove:hover {
+    opacity: 1;
+}
+.hidden-input {
+    display: none;
+}
+
+/* --- Componente de Notificações --- */
+.notifications-wrapper {
+    position: relative;
+    margin-left: auto; 
+}
+.notification-bell {
+    font-size: 1.5rem;
+    color: #94A3B8;
+    cursor: pointer;
+    transition: color 0.2s ease;
+    padding: 0.5rem; /* Aumenta a área de clique */
+}
+.notification-bell:hover {
+    color: white;
+}
+.notification-badge {
+    position: absolute;
+    top: 0;
+    right: 0;
+    background-color: #EF4444;
+    color: white;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 2px solid #1E293B;
+    pointer-events: none; /* Para não interferir no clique do sino */
+}
+.notifications-panel {
+    display: none;
+    position: fixed;
+    width: 380px;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+    z-index: 1100; /* ✅ CORREÇÃO: Z-index aumentado para ficar acima da sidebar */
+    animation: fadeIn 0.3s ease;
+    color: #1E293B;
+    animation: slideDown 0.2s ease-out;
+      transition: opacity 0.2s ease;
+}
+.notifications-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid #F1F5F9;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.notifications-header h3 {
+    font-size: 1.125rem;
+    margin: 0;
+}
+.notifications-body {
+    max-height: 400px; /* ✅ A altura máxima garante a barra de rolagem */
+    overflow-y: auto;
+}
+.notification-item {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid #F1F5F9;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+.notification-item:hover {
+    background-color: #F8FAFC;
+}
+.notification-item:last-child {
+    border-bottom: none;
+}
+.notification-item.unread {
+    background-color: #F0F5FF;
+    border-left: 3px solid #6366F1;
+}
+.notification-item p {
+    margin: 0.25rem 0 0 0;
+    font-size: 0.875rem;
+    color: #475569;
+}
+.notification-item small {
+    font-size: 0.75rem;
+    color: #94A3B8;
+}
+.no-notifications {
+    padding: 2rem;
+    text-align: center;
+    color: #94A3B8;
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

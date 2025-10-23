@@ -1,17 +1,21 @@
+import os
 import json
 import base64
-from flask import Blueprint, request, jsonify, session
+import time
+from flask import Blueprint, request, jsonify, session, Response
 from sqlalchemy import text
 from werkzeug.security import generate_password_hash, check_password_hash
 from database import SessionLocal
+from services import generate_meeting_summary
 import services
+import requests
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
 def hash_password(password):
     return generate_password_hash(password)
 
-# --- ROTAS DE USUÁRIO (sem alteração) ---
+# --- ROTAS DE USUÁRIO E PERFIL ---
 @api_bp.route('/register', methods=['POST'])
 def register():
     data = request.json
@@ -188,6 +192,7 @@ def user_photo(user_id):
     finally:
         db.close()
 
+# --- ROTAS DE FEEDBACKS E DASHBOARD ---
 @api_bp.route('/feedbacks', methods=['POST'])
 def create_feedback():
     if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
@@ -207,98 +212,7 @@ def create_feedback():
     finally:
         db.close()
 
-@api_bp.route('/api/feedbacks/import', methods=['POST'])
-def import_feedbacks_api_key():
-    import os
-    from datetime import datetime
-
-    # --- 1. Validação da API Key ---
-    provided_key = request.headers.get("X-API-KEY")
-    valid_key = os.getenv("IMPORT_API_KEY", "12345-DEV-KEY")  # defina no ambiente
-    if provided_key != valid_key:
-        return jsonify({"error": "Acesso não autorizado"}), 401
-
-    # --- 2. Lê corpo da requisição ---
-    data = request.get_json()
-    if not data or not isinstance(data, list):
-        return jsonify({"error": "Formato inválido. Envie uma lista JSON de feedbacks."}), 400
-
-    db = SessionLocal()
-    imported = 0
-    errors = []
-
-    try:
-        for item in data:
-            try:
-                employee_id = item.get("user_id")
-                manager_id = item.get("manager_id")
-                feedback_date = item.get("feedback_date")
-                description = item.get("description")
-
-                # --- 3. Validação básica ---
-                if not all([employee_id, manager_id, feedback_date, description]):
-                    raise ValueError("Campos obrigatórios ausentes (user_id, manager_id, feedback_date, description)")
-
-                # --- 4. Cria o registro ---
-                new_feedback = Feedback(
-                    employee_id=employee_id,
-                    manager_id=manager_id,
-                    feedback_date=datetime.strptime(feedback_date, "%Y-%m-%d"),
-                    description=description
-                )
-
-                # --- 5. Gera embedding do feedback (caso seu sistema use OpenAI) ---
-                try:
-                    from services import get_embedding
-                    new_feedback.embedding = get_embedding(description)
-                except Exception:
-                    pass  # ignora falhas na IA durante a importação
-
-                db.add(new_feedback)
-                imported += 1
-
-            except Exception as e:
-                errors.append({
-                    "feedback": item,
-                    "error": str(e)
-                })
-
-        db.commit()
-        return jsonify({
-            "success": True,
-            "imported": imported,
-            "errors": errors
-        }), 200
-
-    except Exception as e:
-        db.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        db.close()
-
-
-@api_bp.route('/feedbacks/<int:feedback_id>', methods=['PUT'])
-def update_feedback(feedback_id):
-    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
-    db = SessionLocal()
-    try:
-        data = request.json
-        description, feedback_date = data.get('description'), data.get('feedback_date')
-        if not description: return jsonify({"error": "Description is required"}), 400
-        temporal_context = f"Feedback de {feedback_date}: {description}"
-        embedding = services.get_embedding(temporal_context)
-        db.execute(
-            text("UPDATE feedbacks SET description = :d, feedback_date = :fd, embedding = :e, created_at = CURRENT_TIMESTAMP WHERE id = :fid AND manager_id = :mid"),
-            {"d": description, "fd": feedback_date, "e": str(embedding), "fid": feedback_id, "mid": session['user_id']}
-        )
-        db.commit()
-        return jsonify({"success": True})
-    except Exception as e:
-        db.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        db.close()
-
+# ✅ ROTA CORRIGIDA (ADICIONADA NOVAMENTE)
 @api_bp.route('/dashboard', methods=['GET'])
 def dashboard():
     if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
@@ -390,150 +304,111 @@ def user_feedbacks(user_id):
     finally:
         db.close()
 
+# --- ROTAS DE CHAT E REUNIÕES ---
 @api_bp.route('/chat', methods=['POST'])
 def chat():
     if 'user_id' not in session:
         return jsonify({"error": "Unauthorized"}), 401
 
-    db = SessionLocal()
+    data = request.json
+    user_question = data.get("question", "")
+    user_id = session["user_id"]
+
+    # 1. Obtenha a URL do webhook do ambiente
+    n8n_webhook_url = os.environ.get('N8N_CHAT_WEBHOOK_URL')
+    if not n8n_webhook_url:
+        return jsonify({"error": "Chat service is not configured."}), 500
+
+    # 2. Prepare os dados para enviar ao n8n
+    payload = {
+        "userId": user_id,
+        "question": user_question
+    }
+
     try:
-        data = request.json
-        user_question = data.get("question", "")
-        user_id = session["user_id"]
+        # 3. Chame o webhook do n8n
+        response = requests.post(n8n_webhook_url, json=payload, timeout=120) # Timeout de 2 minutos
+        response.raise_for_status() # Lança um erro para respostas 4xx/5xx
 
-        # 1. Gera embedding da pergunta
-        question_embedding = services.get_embedding(user_question)
-        embedding_str = "[" + ",".join(map(str, question_embedding)) + "]"
+        # 4. Retorne a resposta do n8n diretamente para o frontend
+        return jsonify(response.json())
 
-        # 2. Busca feedbacks relacionados
-        feedback_results = db.execute(
-            text("""
-                SELECT u.name AS employee_name, f.feedback_date AS date, f.description AS content, 
-                       'Feedback' AS type, (1 - (f.embedding <=> CAST(:embedding AS vector))) AS similarity
-                FROM feedbacks f
-                JOIN users u ON f.employee_id = u.id
-                WHERE f.manager_id = :user_id
-                ORDER BY similarity DESC
-                LIMIT 5
-            """),
-            {"embedding": embedding_str, "user_id": user_id}
-        ).fetchall()
-
-        # 3. Busca trechos de reuniões relacionados
-        meeting_results = db.execute(
-            text("""
-                SELECT m.meeting_date AS date, mc.chunk_text AS content, 
-                       'Trecho de Reunião' AS type, (1 - (mc.embedding <=> CAST(:embedding AS vector))) AS similarity
-                FROM meeting_chunks mc
-                JOIN meetings m ON mc.meeting_id = m.id
-                WHERE m.user_id = :user_id
-                ORDER BY similarity DESC
-                LIMIT 5
-            """),
-            {"embedding": embedding_str, "user_id": user_id}
-        ).fetchall()
-
-        # 4. Concatena resultados válidos (similaridade > 0.5)
-        relevant_docs = []
-        for row in feedback_results:
-            if row.similarity and row.similarity > 0.3:
-                relevant_docs.append({
-                    "name": row.employee_name,
-                    "date": row.date,
-                    "content": row.content,
-                    "type": row.type,
-                    "similarity": float(row.similarity)
-                })
-
-        for row in meeting_results:
-            if row.similarity and row.similarity > 0.3:
-                relevant_docs.append({
-                    "name": "Você",
-                    "date": row.date,
-                    "content": row.content,
-                    "type": row.type,
-                    "similarity": float(row.similarity)
-                })
-
-        relevant_docs.sort(key=lambda x: x["similarity"], reverse=True)
-
-        # 5. Gera resposta
-        if not relevant_docs:
-            return jsonify({"answer": "Não encontrei feedbacks ou reuniões relacionados à sua pergunta."})
-
-        context = "\n\n---\n\n".join(
-            f"{doc['type']} de {doc['name']} em {doc['date'].strftime('%d/%m/%Y')}:\n{doc['content']}"
-            for doc in relevant_docs
-        )
-
-        answer = services.create_chat_response(user_question, context)
-        return jsonify({"answer": answer, "sources": len(relevant_docs)})
-
+    except requests.exceptions.RequestException as e:
+        print(f"Error calling n8n webhook: {e}")
+        return jsonify({"error": "Could not connect to the chat service."}), 503
     except Exception as e:
+        print(f"An unexpected error occurred: {e}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        db.close()
 
-# ✅ ALTERADO: Salvar reunião agora cria a reunião e depois os chunks
 @api_bp.route('/meetings', methods=['GET', 'POST'])
 def handle_meetings():
     if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
     db = SessionLocal()
+    user_id = session['user_id']
     try:
         if request.method == 'POST':
             data = request.json
-            # 1. Insere a reunião e obtém o ID
             result = db.execute(
                 text("INSERT INTO meetings (user_id, meeting_date, transcription, summary) VALUES (:uid, :date, :trans, :sum) RETURNING id"),
-                {"uid": session['user_id'], "date": data['meeting_date'], "trans": data.get('transcription', ''), "sum": data['summary']}
+                {"uid": user_id, "date": data['meeting_date'], "trans": data.get('transcription', ''), "sum": data['summary']}
             )
             meeting_id = result.fetchone()[0]
 
-            # 2. Constrói o texto completo e o divide em chunks
             full_text = f"Reunião de {data['meeting_date']}. Resumo: {data['summary']}. Transcrição: {data.get('transcription', '')}"
             text_chunks = services.chunk_text(full_text)
 
-            # 3. Gera embedding para cada chunk e salva
             for chunk in text_chunks:
                 embedding = services.get_embedding(chunk)
                 db.execute(
                     text("INSERT INTO meeting_chunks (meeting_id, chunk_text, embedding) VALUES (:mid, :text, :emb)"),
                     {"mid": meeting_id, "text": chunk, "emb": str(embedding)}
                 )
-
             db.commit()
-            return jsonify({"success": True})
+            return jsonify({"success": True, "meeting_id": meeting_id})
         else: # GET
             result = db.execute(
-                text("SELECT id, meeting_date, summary FROM meetings WHERE user_id = :uid ORDER BY meeting_date DESC"),
-                {"uid": session['user_id']}
+                text("""
+                    SELECT m.id, m.meeting_date, m.summary, u.name as owner_name, m.user_id
+                    FROM meetings m
+                    JOIN users u ON m.user_id = u.id
+                    WHERE m.user_id = :uid OR m.id IN (
+                        SELECT meeting_id FROM meeting_access WHERE user_id = :uid
+                    )
+                    ORDER BY m.meeting_date DESC
+                """),
+                {"uid": user_id}
             )
-            meetings = [{"id": r[0], "meeting_date": r[1].isoformat(), "summary": r[2]} for r in result.fetchall()]
+            meetings = [{"id": r[0], "meeting_date": r[1].isoformat(), "summary": r[2], "owner_name": r[3], "is_owner": r[4] == user_id} for r in result.fetchall()]
             return jsonify({"meetings": meetings})
     finally:
         db.close()
 
-# ✅ ALTERADO: Atualizar reunião agora apaga chunks antigos e cria novos
 @api_bp.route('/meetings/<int:meeting_id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_single_meeting(meeting_id):
     if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
     db = SessionLocal()
+    user_id = session['user_id']
     try:
         if request.method == 'GET':
-            result = db.execute(text("SELECT id, meeting_date, summary, transcription FROM meetings WHERE id = :mid AND user_id = :uid"),{"mid": meeting_id, "uid": session['user_id']}).fetchone()
-            if result: return jsonify({"id": result[0], "meeting_date": result[1].isoformat(), "summary": result[2], "transcription": result[3]})
-            return jsonify({"error": "Meeting not found"}), 404
+            query = text("""
+                SELECT id, meeting_date, summary, transcription 
+                FROM meetings 
+                WHERE id = :mid AND (user_id = :uid OR id IN (
+                    SELECT meeting_id FROM meeting_access WHERE user_id = :uid
+                ))
+            """)
+            result = db.execute(query, {"mid": meeting_id, "uid": user_id}).fetchone()
+            if result: 
+                return jsonify({"id": result[0], "meeting_date": result[1].isoformat(), "summary": result[2], "transcription": result[3]})
+            return jsonify({"error": "Meeting not found or access denied"}), 404
         elif request.method == 'PUT':
             data = request.json
-            # 1. Atualiza a reunião principal
             db.execute(
                 text("UPDATE meetings SET meeting_date = :date, transcription = :trans, summary = :sum WHERE id = :mid AND user_id = :uid"),
                 {"date": data['meeting_date'], "trans": data.get('transcription', ''), "sum": data['summary'], "mid": meeting_id, "uid": session['user_id']}
             )
-            # 2. Apaga os chunks antigos
             db.execute(text("DELETE FROM meeting_chunks WHERE meeting_id = :mid"), {"mid": meeting_id})
 
-            # 3. Cria e salva os novos chunks (mesma lógica do POST)
             full_text = f"Reunião de {data['meeting_date']}. Resumo: {data['summary']}. Transcrição: {data.get('transcription', '')}"
             text_chunks = services.chunk_text(full_text)
             for chunk in text_chunks:
@@ -542,11 +417,9 @@ def handle_single_meeting(meeting_id):
                     text("INSERT INTO meeting_chunks (meeting_id, chunk_text, embedding) VALUES (:mid, :text, :emb)"),
                     {"mid": meeting_id, "text": chunk, "emb": str(embedding)}
                 )
-
             db.commit()
             return jsonify({"success": True})
         elif request.method == 'DELETE':
-            # O 'ON DELETE CASCADE' na tabela de chunks já garante que eles serão apagados.
             db.execute(text("DELETE FROM meetings WHERE id = :mid AND user_id = :uid"), {"mid": meeting_id, "uid": session['user_id']})
             db.commit()
             return jsonify({"success": True})
@@ -556,14 +429,166 @@ def handle_single_meeting(meeting_id):
     finally:
         db.close()
 
-@api_bp.route('/meetings/summarize', methods=['POST'])
-def summarize_meeting():
+@api_bp.route('/meetings/<int:meeting_id>/share', methods=['POST', 'GET'])
+def share_meeting(meeting_id):
     if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
-    data = request.json
-    transcription = data.get('transcription')
-    if not transcription: return jsonify({"error": "Transcription is required"}), 400
+    db = SessionLocal()
+    user_id = session['user_id']
     try:
-        summary = services.summarize_transcription(transcription)
-        return jsonify({"summary": summary})
+        owner_check = db.execute(text("SELECT u.name, m.summary FROM meetings m JOIN users u ON m.user_id = u.id WHERE m.id = :mid AND m.user_id = :uid"), {"mid": meeting_id, "uid": user_id}).fetchone()
+        if not owner_check and request.method == 'POST':
+            return jsonify({"error": "Somente o criador pode compartilhar a reunião"}), 403
+
+        if request.method == 'POST':
+            data = request.json
+            participant_ids = data.get('user_ids', [])
+
+            db.execute(text("DELETE FROM meeting_access WHERE meeting_id = :mid"), {"mid": meeting_id})
+
+            owner_name = owner_check[0]
+            meeting_summary = owner_check[1]
+            title = "Nova reunião compartilhada"
+            message = f"{owner_name} compartilhou a reunião '{meeting_summary[:30]}...' com você."
+            link = f"/meetings/{meeting_id}"
+
+            for p_id in participant_ids:
+                if int(p_id) != user_id:
+                    db.execute(
+                        text("INSERT INTO meeting_access (meeting_id, user_id) VALUES (:mid, :uid) ON CONFLICT DO NOTHING"),
+                        {"mid": meeting_id, "uid": p_id}
+                    )
+                    db.execute(
+                        text("""
+                            INSERT INTO notifications (user_id, actor_id, title, message, link)
+                            VALUES (:uid, :actor_id, :title, :message, :link)
+                        """),
+                        {"uid": p_id, "actor_id": user_id, "title": title, "message": message, "link": link}
+                    )
+            db.commit()
+            return jsonify({"success": True})
+
+        else: # GET
+            result = db.execute(text("SELECT user_id FROM meeting_access WHERE meeting_id = :mid"), {"mid": meeting_id})
+            shared_with_ids = [row[0] for row in result.fetchall()]
+            return jsonify({"shared_with": shared_with_ids})
+
     except Exception as e:
+        db.rollback()
         return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
+@api_bp.route("/meetings/summarize", methods=["POST"])
+def summarize_meeting():
+    data = request.get_json()
+    transcription = data.get("transcription", "")
+    if not transcription.strip():
+        return jsonify({"error": "Nenhuma transcrição fornecida."}), 400
+
+    try:
+        summary = generate_meeting_summary(transcription)
+        return jsonify({"summary": summary}), 200
+    except Exception as e:
+        print(f"Erro ao gerar resumo: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --- ROTAS DE NOTIFICAÇÕES ---
+@api_bp.route('/notifications', methods=['GET'])
+def get_notifications():
+    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = SessionLocal()
+    user_id = session['user_id']
+    try:
+        notifs_res = db.execute(
+            text("""
+                SELECT id, title, message, link, is_read, created_at, actor_id 
+                FROM notifications 
+                WHERE user_id = :uid 
+                ORDER BY created_at DESC
+            """),
+            {"uid": user_id}
+        ).fetchall()
+
+        unread_count_res = db.execute(
+            text("SELECT COUNT(id) FROM notifications WHERE user_id = :uid AND is_read = FALSE"),
+            {"uid": user_id}
+        ).fetchone()
+
+        notifications = [
+            {"id": n[0], "title": n[1], "message": n[2], "link": n[3], "is_read": n[4], 
+             "created_at": n[5].isoformat(), "actor_id": n[6]} for n in notifs_res
+        ]
+
+        return jsonify({
+            "notifications": notifications,
+            "unread_count": unread_count_res[0] if unread_count_res else 0
+        })
+    finally:
+        db.close()
+
+@api_bp.route('/notifications/<int:notification_id>/read', methods=['POST'])
+def mark_notification_as_read(notification_id):
+    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = SessionLocal()
+    try:
+        db.execute(
+            text("UPDATE notifications SET is_read = TRUE WHERE id = :nid AND user_id = :uid"),
+            {"nid": notification_id, "uid": session['user_id']}
+        )
+        db.commit()
+        return jsonify({"success": True})
+    finally:
+        db.close()
+
+@api_bp.route('/notifications/read-all', methods=['POST'])
+def mark_all_notifications_as_read():
+    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = SessionLocal()
+    try:
+        db.execute(
+            text("UPDATE notifications SET is_read = TRUE WHERE user_id = :uid"),
+            {"uid": session['user_id']}
+        )
+        db.commit()
+        return jsonify({"success": True})
+    finally:
+        db.close()
+
+@api_bp.route('/notifications/poll')
+def poll_notifications():
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    # ✅ ALTERADO: Agora esperamos um ID em vez de um timestamp
+    since_id_str = request.args.get('since_id')
+    if not since_id_str:
+        return jsonify([])
+
+    try:
+        since_id = int(since_id_str)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid ID format"}), 400
+
+    db = SessionLocal()
+    try:
+        # ✅ ALTERADO: A query agora compara o ID, que é exato e sem perdas
+        new_notifs_res = db.execute(
+            text("""
+                SELECT id, title, message, link, is_read, created_at, actor_id
+                FROM notifications
+                WHERE user_id = :uid AND id > :since_id
+                ORDER BY id ASC
+            """),
+            {"uid": session['user_id'], "since_id": since_id}
+        ).fetchall()
+
+        notifications = [
+            {
+                "id": n[0], "title": n[1], "message": n[2], "link": n[3],
+                "is_read": n[4], "created_at": n[5].isoformat(), "actor_id": n[6]
+            } for n in new_notifs_res
+        ]
+
+        return jsonify(notifications)
+    finally:
+        db.close()

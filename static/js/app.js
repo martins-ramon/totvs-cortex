@@ -1,4 +1,6 @@
 let currentUser = null;
+let allNotifications = [];
+let notificationEventSource = null;
 
 // --- AUTENTICAÇÃO E INICIALIZAÇÃO ---
 
@@ -36,18 +38,42 @@ function showApp() {
     document.getElementById('user-name').textContent = currentUser.name;
     document.getElementById('user-company').textContent = currentUser.company;
 
-    // ✅ ALTERAÇÃO: Renderiza e exibe o chat widget
-    renderChatWidget(); // 1. Primeiro, criamos o conteúdo do chat.
+    renderChatWidget();
     const chatWidget = document.getElementById('chat-widget');
     if (chatWidget) {
-        chatWidget.style.display = 'block'; // 2. Depois, tornamos seu container visível.
+        chatWidget.style.display = 'block';
     }
 
     loadSidebarUserPhoto();
+    fetchInitialNotifications();
+
+    // ✅ LÓGICA DE POSICIONAMENTO DO PAINEL
+    const bell = document.getElementById('notification-bell');
+    const panel = document.getElementById('notifications-panel');
+    bell.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (panel.style.display === 'block') {
+            panel.style.display = 'none';
+        } else {
+            const bellRect = bell.getBoundingClientRect();
+            panel.style.top = `${bellRect.bottom + 10}px`;
+            panel.style.left = `${bellRect.left - panel.offsetWidth + bell.offsetWidth}px`;
+            panel.style.display = 'block';
+        }
+    });
+    document.addEventListener('click', (e) => {
+        if (!panel.contains(e.target) && e.target !== bell) {
+            panel.style.display = 'none';
+        }
+    });
+
     showMyTeam();
 }
 
 async function logout() {
+    if (notificationEventSource) {
+        notificationEventSource.close();
+    }
     try {
         await fetch('/api/logout', { method: 'POST', credentials: 'include' });
         sessionStorage.removeItem('currentUser');
@@ -60,7 +86,6 @@ async function logout() {
 }
 
 // --- UTILITÁRIOS DE UI (Toast, Modal, Navegação) ---
-// ... (nenhuma alteração nesta seção)
 function showToast(message, type = 'info', title = null) {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
@@ -75,9 +100,12 @@ function showToast(message, type = 'info', title = null) {
 function setActiveNav(viewName) {
     document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
     document.querySelectorAll('.view').forEach(view => view.style.display = 'none');
-    const viewMap = { 'my-team': 0, 'feedbacks': 1, 'meetings': 2 };
-    if (viewMap[viewName] !== undefined) {
-        document.querySelectorAll('.nav-item')[viewMap[viewName]].classList.add('active');
+
+    // ✅ REMOVIDO 'notifications' do mapa de navegação
+    const viewMap = { 'my-team': 0, 'feedbacks': 1, 'meetings': 2 }; 
+    const navItems = document.querySelectorAll('.sidebar-nav .nav-item');
+    if (viewMap[viewName] !== undefined && navItems[viewMap[viewName]]) {
+        navItems[viewMap[viewName]].classList.add('active');
     }
 }
 
@@ -105,8 +133,272 @@ window.onclick = function(event) {
     }
 }
 
+// --- COMPONENTE DE AUTOCOMPLETE REUTILIZÁVEL ---
+function createAutocomplete(
+    containerId,
+    items,
+    {
+        placeholder = 'Selecione...',
+        isMulti = false,
+        initialValue = null,
+        onSelectionChange = () => {}
+    }
+) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    let selectedItems = [];
+    const hiddenInput = document.createElement('input');
+    hiddenInput.type = 'hidden';
+    hiddenInput.id = `${containerId}-value`;
+    container.appendChild(hiddenInput);
+
+    const autocompleteContainer = document.createElement('div');
+    autocompleteContainer.className = 'autocomplete-container';
+    container.appendChild(autocompleteContainer);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'autocomplete-input';
+    input.placeholder = placeholder;
+
+    const suggestionsPanel = document.createElement('div');
+    suggestionsPanel.className = 'autocomplete-suggestions';
+    suggestionsPanel.style.display = 'none';
+    container.appendChild(suggestionsPanel);
+
+    const renderTokens = () => {
+        autocompleteContainer.querySelectorAll('.token').forEach(t => t.remove());
+        selectedItems.forEach(item => {
+            const token = document.createElement('div');
+            token.className = 'token';
+            token.textContent = item.name;
+            const removeBtn = document.createElement('span');
+            removeBtn.className = 'token-remove';
+            removeBtn.innerHTML = '&times;';
+            removeBtn.onclick = () => {
+                selectedItems = selectedItems.filter(i => i.id !== item.id);
+                updateHiddenInput();
+                renderTokens();
+                onSelectionChange(null);
+            };
+            token.appendChild(removeBtn);
+            autocompleteContainer.insertBefore(token, input);
+        });
+        updateHiddenInput();
+    };
+
+    const updateHiddenInput = () => {
+        if (isMulti) {
+            hiddenInput.value = JSON.stringify(selectedItems.map(item => item.id));
+        } else {
+            hiddenInput.value = selectedItems.length > 0 ? selectedItems[0].id : '';
+        }
+    };
+
+    const handleSelection = (item) => {
+        if (isMulti) {
+            if (!selectedItems.some(i => i.id === item.id)) {
+                selectedItems.push(item);
+            }
+            input.value = '';
+            renderTokens();
+        } else {
+            selectedItems = [item];
+            input.value = item.name;
+        }
+        updateHiddenInput();
+        onSelectionChange(item.id);
+        suggestionsPanel.style.display = 'none';
+    };
+
+    input.addEventListener('input', () => {
+        const query = input.value.toLowerCase();
+        if (!query && !isMulti) {
+             selectedItems = [];
+             updateHiddenInput();
+             onSelectionChange(null);
+        }
+
+        const filteredItems = items.filter(item =>
+            item.name.toLowerCase().includes(query) &&
+            !selectedItems.some(sel => sel.id === item.id)
+        );
+
+        suggestionsPanel.innerHTML = '';
+        if (filteredItems.length) {
+            filteredItems.forEach(item => {
+                const suggestionItem = document.createElement('div');
+                suggestionItem.className = 'suggestion-item';
+                suggestionItem.textContent = item.name;
+                if (item.company) {
+                    const companySpan = document.createElement('small');
+                    companySpan.textContent = `(${item.company})`;
+                    suggestionItem.appendChild(companySpan);
+                }
+                suggestionItem.onclick = () => handleSelection(item);
+                suggestionsPanel.appendChild(suggestionItem);
+            });
+            suggestionsPanel.style.display = 'block';
+        } else {
+            suggestionsPanel.style.display = 'none';
+        }
+    });
+
+    input.addEventListener('focus', () => {
+        if (input.value) input.dispatchEvent(new Event('input'));
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!container.contains(e.target)) {
+            suggestionsPanel.style.display = 'none';
+            if (!isMulti && selectedItems.length > 0 && input.value !== selectedItems[0].name) {
+                input.value = selectedItems[0].name;
+            }
+        }
+    });
+
+    autocompleteContainer.appendChild(input);
+
+    if (initialValue) {
+        if (isMulti) {
+            selectedItems = items.filter(item => initialValue.includes(item.id));
+            renderTokens();
+        } else {
+            const initialItem = items.find(item => item.id === initialValue);
+            if (initialItem) {
+                handleSelection(initialItem);
+            }
+        }
+    }
+}
+
+// --- SEÇÃO DE NOTIFICAÇÕES ---
+
+let latestNotificationId = null;
+
+async function pollForNotifications() {
+    if (!latestNotificationId) return;
+
+    try {
+        const response = await fetch(`/api/notifications/poll?since_id=${latestNotificationId}`);
+        if (!response.ok) {
+            console.error(`Erro na requisição de polling: ${response.status}`);
+            return;
+        }
+
+        const newNotifications = await response.json();
+
+        if (newNotifications && newNotifications.length > 0) {
+            console.log(`Recebidas ${newNotifications.length} novas notificações.`);
+
+            newNotifications.reverse().forEach(notification => {
+                allNotifications.unshift(notification);
+                showToast(notification.message, 'info', notification.title);
+            });
+
+            // ✅ ALTERADO: Atualiza o ID da última notificação vista
+            latestNotificationId = allNotifications[0].id;
+
+            const unreadCount = allNotifications.filter(n => !n.is_read).length;
+            updateNotificationBadge(unreadCount);
+            renderNotificationsPanel();
+        }
+    } catch (error) {
+        console.error('Erro durante o polling de notificações:', error);
+    }
+}
+
+// ✅ ALTERADO: A função de carga inicial agora configura o ID para o polling
+async function fetchInitialNotifications() {
+    try {
+        const response = await fetch('/api/notifications', { credentials: 'include' });
+        const data = await response.json();
+        allNotifications = data.notifications || [];
+        updateNotificationBadge(data.unread_count || 0);
+        renderNotificationsPanel();
+
+        // Se houver notificações, guarda o ID da mais recente
+        if (allNotifications.length > 0) {
+            latestNotificationId = allNotifications[0].id;
+        }
+
+        // Inicia o loop de polling
+        setInterval(pollForNotifications, 5000);
+
+    } catch (error) {
+        console.error('Falha ao buscar o estado inicial das notificações:', error);
+    }
+}
+
+function updateNotificationBadge(count) {
+    const badge = document.getElementById('notification-badge');
+    if (count > 0) {
+        badge.textContent = count > 9 ? '9+' : count;
+        badge.style.display = 'flex';
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+function renderNotificationsPanel() {
+    const body = document.getElementById('notifications-body');
+
+    // ✅ ALTERADO: Renderiza TODAS as notificações, não apenas as recentes
+    if (allNotifications.length === 0) {
+        body.innerHTML = '<div class="no-notifications">Nenhuma notificação.</div>';
+        return;
+    }
+
+    body.innerHTML = allNotifications.map(n => `
+        <div class="notification-item ${!n.is_read ? 'unread' : ''}" onclick="handleNotificationClick(${n.id}, '${n.link}')">
+            <strong>${n.title}</strong>
+            <p>${n.message}</p>
+            <small>${new Date(n.created_at).toLocaleString('pt-BR')}</small>
+        </div>
+    `).join('');
+}
+
+async function handleNotificationClick(id, link) {
+    const notification = allNotifications.find(n => n.id === id);
+    if (notification && !notification.is_read) {
+        await markNotificationAsRead(id);
+    }
+
+    if (link && link.startsWith('/meetings/')) {
+        const meetingId = link.split('/')[2];
+        // ✅ SIMPLIFICADO: Apenas abre o modal, sem mudar a view
+        viewMeeting(meetingId);
+    }
+    document.getElementById('notifications-panel').style.display = 'none';
+}
+
+async function markNotificationAsRead(id) {
+    try {
+        await fetch(`/api/notifications/${id}/read`, { method: 'POST', credentials: 'include' });
+        const notification = allNotifications.find(n => n.id === id);
+        if (notification) notification.is_read = true;
+        const unreadCount = allNotifications.filter(n => !n.is_read).length;
+        updateNotificationBadge(unreadCount);
+        renderNotificationsPanel();
+    } catch (error) {
+        console.error('Falha ao marcar notificação como lida:', error);
+    }
+}
+
+async function markAllAsRead() {
+    try {
+        await fetch('/api/notifications/read-all', { method: 'POST', credentials: 'include' });
+        allNotifications.forEach(n => n.is_read = true);
+        updateNotificationBadge(0);
+        renderNotificationsPanel();
+    } catch (error) {
+        console.error('Falha ao marcar todas como lidas:', error);
+    }
+}
+
+
 // --- VIEW: MEU TIME ---
-// ... (nenhuma alteração nesta seção)
 async function showMyTeam() {
     setActiveNav('my-team');
     document.getElementById('my-team-view').style.display = 'block';
@@ -172,17 +464,29 @@ async function showFeedbacks() {
     const form = document.getElementById('feedback-form');
     form.reset();
     document.getElementById('feedback-date').value = new Date().toISOString().split('T')[0];
+    document.getElementById('last-feedback-info').style.display = 'none';
     const submitButton = form.querySelector('button[type="submit"]');
-    submitButton.textContent = 'Salvar Feedback';
-    await loadManagedUsers();
+    submitButton.textContent = 'Salvar Feedback com IA';
+    submitButton.onclick = (event) => submitFeedback(event);
+    await loadManagedUsersForFeedback();
 }
 
-async function loadManagedUsers() {
+async function loadManagedUsersForFeedback() {
     try {
         const response = await fetch('/api/managed-users', { credentials: 'include' });
         const data = await response.json();
-        const select = document.getElementById('feedback-user');
-        select.innerHTML = '<option value="">Selecione...</option>' + data.managed_users.map(user => `<option value="${user.id}">${user.name} (${user.company})</option>`).join('');
+        createAutocomplete('feedback-user-container', data.managed_users, {
+            placeholder: 'Digite para buscar um liderado...',
+            isMulti: false,
+            onSelectionChange: (selectedId) => {
+                selectedUserForFeedback = selectedId;
+                if (selectedId) {
+                    loadUserLastFeedback();
+                } else {
+                    document.getElementById('last-feedback-info').style.display = 'none';
+                }
+            }
+        });
     } catch (error) {
         console.error('Failed to load managed users:', error);
     }
@@ -190,18 +494,18 @@ async function loadManagedUsers() {
 
 async function submitFeedback(event) {
     event.preventDefault();
-    const user_id = document.getElementById('feedback-user').value;
+    const user_id = document.getElementById('feedback-user-container-value').value;
     const feedback_date = document.getElementById('feedback-date').value;
     const description = document.getElementById('feedback-description').value;
     if (!user_id || !feedback_date || !description) {
         showToast('Preencha os campos obrigatórios (usuário, data e descrição)', 'warning');
         return;
     }
-    // const button = event.target.querySelector('button[type="submit"]');
+
     const button = event.target.tagName === 'FORM'
         ? event.target.querySelector('button[type="submit"]')
         : event.target;
-    
+
     button.disabled = true;
     button.textContent = 'Processando com IA...';
     try {
@@ -212,8 +516,7 @@ async function submitFeedback(event) {
         const data = await response.json();
         if (data.success) {
             showToast('Feedback salvo e vetorizado com sucesso!', 'success');
-            document.getElementById('feedback-form').reset();
-            document.getElementById('feedback-date').value = new Date().toISOString().split('T')[0];
+            showFeedbacks();
         } else {
             showToast('Erro ao salvar feedback', 'error');
         }
@@ -227,8 +530,7 @@ async function submitFeedback(event) {
 }
 
 async function loadUserLastFeedback() {
-    const userId = document.getElementById('feedback-user').value;
-    selectedUserForFeedback = userId;
+    const userId = selectedUserForFeedback;
     const lastFeedbackInfo = document.getElementById('last-feedback-info');
     if (!userId) {
         lastFeedbackInfo.style.display = 'none';
@@ -253,14 +555,18 @@ async function loadUserLastFeedback() {
 async function showFeedbackHistory() {
     if (!selectedUserForFeedback) return;
     try {
+        const usersResponse = await fetch('/api/managed-users', { credentials: 'include' });
+        const usersData = await usersResponse.json();
+        const selectedUser = usersData.managed_users.find(u => u.id == selectedUserForFeedback);
+        const userName = selectedUser ? selectedUser.name : 'Usuário';
+
         const response = await fetch(`/api/user/${selectedUserForFeedback}/feedbacks`, { credentials: 'include' });
         const data = await response.json();
         if (!data.feedbacks || data.feedbacks.length === 0) {
             showToast('Nenhum feedback anterior encontrado', 'info');
             return;
         }
-        const userSelect = document.getElementById('feedback-user');
-        const userName = userSelect.options[userSelect.selectedIndex].text.split(' (')[0];
+
         const modalBody = document.getElementById('modal-body');
         modalBody.innerHTML = `<h3>Histórico de Feedbacks - ${userName}</h3><div style="max-height: 500px; overflow-y: auto; margin-top: 1rem;">${data.feedbacks.map(fb => `<div class="feedback-history-item" style="border: 1px solid #E2E8F0; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;"><div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;"><strong>${new Date(fb.feedback_date.replace(/-/g, '/')).toLocaleDateString('pt-BR')}</strong><button onclick="editFeedback(${fb.id})" class="btn-link">Editar</button></div><div style="font-size: 0.875rem; color: #64748B; white-space: pre-wrap;"><p>${fb.description}</p></div></div>`).join('')}</div>`;
         document.getElementById('modal').style.display = 'flex';
@@ -277,6 +583,20 @@ async function editFeedback(feedbackId) {
         const feedback = data.feedbacks.find(f => f.id === feedbackId);
         if (!feedback) return;
         closeModal();
+
+        const usersResponse = await fetch('/api/managed-users', { credentials: 'include' });
+        const usersData = await usersResponse.json();
+        createAutocomplete('feedback-user-container', usersData.managed_users, {
+            placeholder: 'Digite para buscar um liderado...',
+            isMulti: false,
+            initialValue: parseInt(selectedUserForFeedback),
+            onSelectionChange: (selectedId) => {
+                selectedUserForFeedback = selectedId;
+                if (selectedId) loadUserLastFeedback();
+                else document.getElementById('last-feedback-info').style.display = 'none';
+            }
+        });
+
         document.getElementById('feedback-description').value = feedback.description;
         document.getElementById('feedback-date').value = feedback.feedback_date.split('T')[0];
         const submitButton = document.querySelector('#feedback-form button[type="submit"]');
@@ -320,13 +640,14 @@ async function updateFeedbackSubmit(event, feedbackId) {
     }
 }
 
-// --- VIEW: MINHAS REUNIÕES (BLOCO CORRIGIDO E COMPLETO) ---
+// --- VIEW: MINHAS REUNIÕES ---
 
 async function showMeetings() {
     setActiveNav('meetings');
     document.getElementById('meetings-view').style.display = 'block';
     resetMeetingForm();
-    loadMeetings();
+    await loadMeetings();
+    await loadUsersForSharing();
 }
 
 async function loadMeetings() {
@@ -336,13 +657,44 @@ async function loadMeetings() {
         const response = await fetch('/api/meetings', { credentials: 'include' });
         const data = await response.json();
         if (data.meetings && data.meetings.length > 0) {
-            listContainer.innerHTML = `<div class="meetings-table"><table><thead><tr><th>Data</th><th>Resumo</th><th>Ações</th></tr></thead><tbody>${data.meetings.map(m => `<tr><td>${new Date(m.meeting_date.replace(/-/g, '/')).toLocaleDateString('pt-BR')}</td><td><div class="summary-preview">${m.summary}</div></td><td><div class="action-buttons"><button onclick="viewMeeting(${m.id})" class="btn-small btn-view">Ver</button><button onclick="editMeeting(${m.id})" class="btn-small btn-edit">Editar</button><button onclick="deleteMeeting(${m.id})" class="btn-small btn-delete">Excluir</button></div></td></tr>`).join('')}</tbody></table></div>`;
+            listContainer.innerHTML = `<div class="meetings-table"><table><thead><tr><th>Data</th><th>Resumo</th><th>Dono</th><th>Ações</th></tr></thead><tbody>${
+                data.meetings.map(m => `
+                    <tr>
+                        <td>${new Date(m.meeting_date.replace(/-/g, '/')).toLocaleDateString('pt-BR')}</td>
+                        <td><div class="summary-preview">${m.summary}</div></td>
+                        <td>${m.is_owner ? 'Você' : m.owner_name}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button onclick="viewMeeting(${m.id})" class="btn-small btn-view">Ver</button>
+                                ${m.is_owner ? `
+                                <button onclick="editMeeting(${m.id})" class="btn-small btn-edit">Editar</button>
+                                <button onclick="deleteMeeting(${m.id})" class="btn-small btn-delete">Excluir</button>
+                                ` : ''}
+                            </div>
+                        </td>
+                    </tr>`
+                ).join('')
+            }</tbody></table></div>`;
         } else {
             listContainer.innerHTML = '<div class="no-data"><p>Nenhuma reunião registrada ainda.</p></div>';
         }
     } catch (error) {
         console.error('Failed to load meetings:', error);
         listContainer.innerHTML = '<div class="no-data"><p>Erro ao carregar reuniões.</p></div>';
+    }
+}
+
+async function loadUsersForSharing(initialValue = []) {
+    try {
+        const response = await fetch('/api/users', { credentials: 'include' });
+        const data = await response.json();
+        createAutocomplete('meeting-participants-container', data.users, {
+            placeholder: 'Digite para adicionar...',
+            isMulti: true,
+            initialValue: initialValue
+        });
+    } catch (error) {
+        console.error('Failed to load users for sharing:', error);
     }
 }
 
@@ -377,7 +729,7 @@ async function generateSummary(event) {
 
 async function submitMeeting(event) {
     event.preventDefault();
-    const meeting_id = document.getElementById('meeting-id').value;
+    const meeting_id_val = document.getElementById('meeting-id').value;
     const meeting_date = document.getElementById('meeting-date').value;
     const summary = document.getElementById('meeting-summary').value;
     const transcription = document.getElementById('meeting-transcription').value;
@@ -387,8 +739,8 @@ async function submitMeeting(event) {
         return;
     }
 
-    const isUpdate = !!meeting_id;
-    const url = isUpdate ? `/api/meetings/${meeting_id}` : '/api/meetings';
+    const isUpdate = !!meeting_id_val;
+    const url = isUpdate ? `/api/meetings/${meeting_id_val}` : '/api/meetings';
     const method = isUpdate ? 'PUT' : 'POST';
 
     const button = event.target.querySelector('button[type="submit"]');
@@ -402,7 +754,16 @@ async function submitMeeting(event) {
         });
         const data = await response.json();
         if (data.success) {
-            showToast(`Reunião ${isUpdate ? 'atualizada' : 'salva'} com sucesso!`, 'success');
+            const meetingId = isUpdate ? meeting_id_val : data.meeting_id;
+            const participantsValue = document.getElementById('meeting-participants-container-value').value;
+            const selectedUserIds = participantsValue ? JSON.parse(participantsValue) : [];
+
+            await fetch(`/api/meetings/${meetingId}/share`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+                body: JSON.stringify({ user_ids: selectedUserIds })
+            });
+
+            showToast(`Reunião ${isUpdate ? 'atualizada' : 'salva'} e compartilhada com sucesso!`, 'success');
             resetMeetingForm();
             loadMeetings();
         } else {
@@ -420,6 +781,7 @@ function resetMeetingForm() {
     document.getElementById('meeting-form').reset();
     document.getElementById('meeting-id').value = '';
     document.getElementById('meeting-date').value = new Date().toISOString().split('T')[0];
+    loadUsersForSharing();
 }
 
 async function viewMeeting(id) {
@@ -444,6 +806,11 @@ async function editMeeting(id) {
         document.getElementById('meeting-date').value = data.meeting_date.split('T')[0];
         document.getElementById('meeting-summary').value = data.summary;
         document.getElementById('meeting-transcription').value = data.transcription || '';
+
+        const shareResponse = await fetch(`/api/meetings/${id}/share`, { credentials: 'include' });
+        const shareData = await shareResponse.json();
+        loadUsersForSharing(shareData.shared_with || []);
+
         window.scrollTo(0, 0);
         showToast('Dados da reunião carregados para edição.', 'info');
     } catch (error) {
@@ -451,7 +818,6 @@ async function editMeeting(id) {
     }
 }
 
-// ✅ MODIFICADO: Abre o modal de confirmação
 function deleteMeeting(id) {
     const modalBody = document.getElementById('modal-body');
     modalBody.innerHTML = `
@@ -464,29 +830,19 @@ function deleteMeeting(id) {
             <button onclick="confirmDeleteMeeting(${id})" class="btn-delete-confirm" style="width: 120px;">Sim, Excluir</button>
         </div>
     `;
-    // Adicionando um estilo para o botão de confirmação para ser mais robusto
+
     const style = document.createElement('style');
     style.innerHTML = `
         .btn-delete-confirm {
-            padding: 0.75rem 1rem;
-            background-color: #DC2626;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s ease;
+            padding: 0.75rem 1rem; background-color: #DC2626; color: white;
+            border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s ease;
         }
-        .btn-delete-confirm:hover {
-            background-color: #B91C1C;
-            transform: translateY(-2px);
-        }
+        .btn-delete-confirm:hover { background-color: #B91C1C; transform: translateY(-2px); }
     `;
     document.head.appendChild(style);
     document.getElementById('modal').style.display = 'flex';
 }
 
-// ✅ NOVO: Executa a exclusão após confirmação
 async function confirmDeleteMeeting(id) {
     try {
         const response = await fetch(`/api/meetings/${id}`, { method: 'DELETE', credentials: 'include' });
@@ -536,9 +892,11 @@ async function loadAvailableManagers() {
     try {
         const response = await fetch('/api/users', { credentials: 'include' });
         const data = await response.json();
-        const select = document.getElementById('account-manager');
-        select.innerHTML = '<option value="">Nenhum</option>' + data.users.map(user => `<option value="${user.id}">${user.name} (${user.company})</option>`).join('');
-        select.value = currentUser.manager_id || '';
+        createAutocomplete('account-manager-container', data.users, {
+            placeholder: 'Digite para buscar um gestor...',
+            isMulti: false,
+            initialValue: currentUser.manager_id || null
+        });
     } catch (error) {
         console.error('Failed to load users:', error);
     }
@@ -548,7 +906,7 @@ async function updateProfile() {
     const name = document.getElementById('account-name').value;
     const company = document.getElementById('account-company').value;
     const phone = document.getElementById('account-phone').value;
-    const manager_id = document.getElementById('account-manager').value;
+    const manager_id = document.getElementById('account-manager-container-value').value;
     const mini_bio = document.getElementById('account-bio-final').value;
     if (!name || !company) {
         showToast('Nome e empresa são obrigatórios', 'warning');
@@ -703,7 +1061,7 @@ function previewPhoto(event) {
 
 function renderChatWidget() {
     const container = document.getElementById('chat-widget');
-    if (!container || container.innerHTML.trim() !== '') return; // Previne renderização duplicada
+    if (!container || container.innerHTML.trim() !== '') return;
 
     const chatHTML = `
         <button id="chat-button" class="chat-button" onclick="toggleChat()">
@@ -731,12 +1089,11 @@ function renderChatWidget() {
 
     container.innerHTML = chatHTML;
 
-    // Adiciona evento para enviar com "Enter"
     const chatInput = document.getElementById('chat-input');
     if (chatInput) {
         chatInput.addEventListener('keydown', function(event) {
             if (event.key === 'Enter') {
-                event.preventDefault(); // Previne quebra de linha
+                event.preventDefault();
                 sendChatMessage();
             }
         });
@@ -772,7 +1129,7 @@ async function sendChatMessage() {
         });
         const data = await response.json();
         document.getElementById('typing-indicator').remove();
-        messagesContainer.innerHTML += `<div class="chat-message bot-message">${data.answer || data.error || 'Desculpe, ocorreu um erro.'}</div>`;
+        messagesContainer.innerHTML += `<div class="chat-message bot-message">${data.output || data.error || 'Desculpe, ocorreu um erro.'}</div>`;
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     } catch (error) {
         document.getElementById('typing-indicator').remove();
