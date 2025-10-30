@@ -48,23 +48,6 @@ Sistema revolucionário de feedback com modelo self-service onde usuários se ca
    - Cards de insights com expand/collapse
    - Toast notifications para feedback do sistema
 
-6. **Sistema "Momentum" - Agente Proativo de Carreira** (Outubro 2025)
-   - **Agente IA autônomo** que analisa feedbacks e reuniões proativamente
-   - **Execução automática** a cada 4 horas via APScheduler
-   - **Conversas stateful** com histórico persistido no banco de dados
-   - **Agent Dock** - Interface flutuante no canto inferior direito:
-     - Botão com badge mostrando mensagens não lidas
-     - Painel lateral deslizante com lista de agentes
-     - Sistema de chat dedicado por agente
-     - Mensagens proativas destacadas com estilo diferenciado
-   - **Insights proativos**:
-     - Análise de padrões em feedbacks e reuniões
-     - Sugestões de desenvolvimento de carreira
-     - Identificação de tendências e oportunidades
-     - Recomendações acionáveis específicas
-   - **Polling automático** a cada 30 segundos para atualizar badges
-   - Suporte para **múltiplos agentes** (arquitetura escalável)
-
 ## 🛠 Stack Tecnológica
 
 ### Frontend

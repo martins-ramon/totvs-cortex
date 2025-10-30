@@ -21,11 +21,9 @@ def register():
     data = request.json
     db = SessionLocal()
     try:
-        # Normalize o nome
-        normalized_name = services.normalize_text(data['name'])
         result = db.execute(
-            text("INSERT INTO users (email, password_hash, name, name_normalized, company, phone) VALUES (:email, :password_hash, :name, :normalized_name, :company, :phone) RETURNING id"),
-            {"email": data['email'], "password_hash": hash_password(data['password']), "name": data['name'], "normalized_name": normalized_name, "company": data.get('company', ''), "phone": data.get('phone', '')}
+            text("INSERT INTO users (email, password_hash, name, company, phone) VALUES (:email, :password_hash, :name, :company, :phone) RETURNING id"),
+            {"email": data['email'], "password_hash": hash_password(data['password']), "name": data['name'], "company": data.get('company', ''), "phone": data.get('phone', '')}
         )
         db.commit()
         user_id = result.fetchone()[0]
@@ -116,11 +114,9 @@ def update_profile():
     data = request.json
     db = SessionLocal()
     try:
-        # Normalize o nome
-        normalized_name = services.normalize_text(data['name'])
         db.execute(
-            text("UPDATE users SET name = :name, name_normalized = :normalized_name, company = :company, phone = :phone, manager_id = :manager_id, mini_bio = :mini_bio WHERE id = :id"),
-            {"id": session['user_id'], "name": data['name'], "normalized_name": normalized_name, "company": data.get('company', ''), "phone": data.get('phone', ''), "manager_id": data.get('manager_id'), "mini_bio": data.get('mini_bio')}
+            text("UPDATE users SET name = :name, company = :company, phone = :phone, manager_id = :manager_id, mini_bio = :mini_bio WHERE id = :id"),
+            {"id": session['user_id'], "name": data['name'], "company": data.get('company', ''), "phone": data.get('phone', ''), "manager_id": data.get('manager_id'), "mini_bio": data.get('mini_bio')}
         )
         db.commit()
         return jsonify({"success": True})
@@ -245,7 +241,7 @@ def user_insights(user_id):
             return jsonify({"error": "User not managed by you"}), 404
 
         last_feedback_res = db.execute(
-            text("SELECT description, feedback_date, created_at FROM feedbacks WHERE employee_id = :eid ORDER BY feedback_date DESC LIMIT 1"),
+            text("SELECT description, feedback_date, created_at FROM feedbacks WHERE employee_id = :eid ORDER BY created_at DESC LIMIT 1"),
             {"eid": user_id}
         ).fetchone()
 
@@ -594,171 +590,5 @@ def poll_notifications():
         ]
 
         return jsonify(notifications)
-    finally:
-        db.close()
-
-@api_bp.route('/import/feedback', methods=['POST'])
-def import_feedback():
-    """
-    Endpoint dedicado para importação de feedbacks em lote (ex: via n8n).
-    [ATENÇÃO] Esta versão não possui autenticação e está aberta.
-    Remova ou proteja este endpoint após o uso.
-    """
-
-    # 1. Obter Dados do JSON
-    data = request.json
-    employee_id = data.get('employee_id')
-    manager_id = data.get('manager_id')
-    description = data.get('description')
-    feedback_date = data.get('feedback_date') # Espera uma string de data (ex: "2023-10-25")
-
-    # 2. Validação
-    if not all([employee_id, manager_id, description, feedback_date]):
-        return jsonify({"error": "Campos obrigatórios ausentes: employee_id, manager_id, description, feedback_date"}), 400
-
-    db = SessionLocal()
-    try:
-        # 3. Gerar Embedding (reutilizando a lógica de 'services')
-        temporal_context = f"Feedback de {feedback_date}: {description}"
-        embedding = services.get_embedding(temporal_context) 
-
-        # 4. Inserir no Banco de Dados
-        result = db.execute(
-            text("""
-                INSERT INTO feedbacks (employee_id, manager_id, description, feedback_date, embedding) 
-                VALUES (:eid, :mid, :d, :fd, :e) 
-                RETURNING id
-            """),
-            {
-                "eid": employee_id, 
-                "mid": manager_id, 
-                "d": description, 
-                "fd": feedback_date, 
-                "e": str(embedding)
-            }
-        )
-        db.commit()
-
-        feedback_id = result.fetchone()[0]
-        return jsonify({"success": True, "feedback_id": feedback_id}), 201
-
-    except Exception as e:
-        db.rollback()
-        # Trata erros comuns, como IDs de usuário que não existem
-        if "foreign key constraint" in str(e).lower():
-             return jsonify({"success": False, "error": "ID de funcionário (employee_id) ou gestor (manager_id) inválido. O usuário não existe."}), 400
-        return jsonify({"success": False, "error": str(e)}), 500
-    finally:
-        db.close()
-
-@api_bp.route('/agents', methods=['GET'])
-def get_agents():
-    """Lista os agentes disponíveis e a contagem de mensagens não lidas."""
-    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
-    db = SessionLocal()
-    try:
-        agents = db.execute(text("SELECT id, name, type FROM agents WHERE is_active = TRUE")).fetchall()
-        
-        agent_list = []
-        for agent in agents:
-            unread_count_res = db.execute(
-                text("SELECT COUNT(id) FROM agent_conversations WHERE user_id = :uid AND agent_id = :aid AND is_read = FALSE"),
-                {"uid": session['user_id'], "aid": agent[0]}
-            ).fetchone()
-            agent_list.append({
-                "id": agent[0],
-                "name": agent[1],
-                "type": agent[2],
-                "unread_count": unread_count_res[0] if unread_count_res else 0
-            })
-        return jsonify({"agents": agent_list})
-    finally:
-        db.close()
-
-@api_bp.route('/agents/<int:agent_id>/conversation', methods=['GET'])
-def get_agent_conversation(agent_id):
-    """Busca o histórico de conversa com um agente."""
-    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
-    db = SessionLocal()
-    try:
-        conv_res = db.execute(
-            text("""
-                SELECT id, message_text, is_from_agent, is_proactive_insight, is_read, related_action_data, created_at 
-                FROM agent_conversations
-                WHERE user_id = :uid AND agent_id = :aid
-                ORDER BY created_at ASC
-            """),
-            {"uid": session['user_id'], "aid": agent_id}
-        ).fetchall()
-        
-        conversation = [
-            {"id": r[0], "text": r[1], "is_from_agent": r[2], "is_proactive": r[3], "is_read": r[4], "action_data": r[5], "created_at": r[6].isoformat()}
-            for r in conv_res
-        ]
-        return jsonify({"conversation": conversation})
-    finally:
-        db.close()
-
-@api_bp.route('/agents/<int:agent_id>/conversation/mark_read', methods=['POST'])
-def mark_agent_conversation_as_read(agent_id):
-    """Marca todas as mensagens de um agente como lidas."""
-    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
-    db = SessionLocal()
-    try:
-        db.execute(
-            text("UPDATE agent_conversations SET is_read = TRUE WHERE user_id = :uid AND agent_id = :aid"),
-            {"uid": session['user_id'], "aid": agent_id}
-        )
-        db.commit()
-        return jsonify({"success": True})
-    finally:
-        db.close()
-
-@api_bp.route('/agents/<int:agent_id>/message', methods=['POST'])
-def post_agent_message(agent_id):
-    """Envia uma mensagem para um agente e obtém uma resposta."""
-    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
-    data = request.json
-    user_question = data.get('question')
-    if not user_question:
-        return jsonify({"error": "Question is required"}), 400
-
-    db = SessionLocal()
-    try:
-        db.execute(
-            text("""
-                INSERT INTO agent_conversations (user_id, agent_id, message_text, is_from_agent, is_read)
-                VALUES (:uid, :aid, :msg, FALSE, TRUE)
-            """),
-            {"uid": session['user_id'], "aid": agent_id, "msg": user_question}
-        )
-        db.commit()
-
-        agent = db.execute(text("SELECT id, personality_prompt FROM agents WHERE id = :aid"), {"aid": agent_id}).fetchone()
-        if not agent:
-            return jsonify({"error": "Agent not found"}), 404
-        
-        history_res = db.execute(
-            text("SELECT message_text, is_from_agent FROM agent_conversations WHERE user_id = :uid AND agent_id = :aid ORDER BY created_at DESC LIMIT 5"),
-            {"uid": session['user_id'], "aid": agent_id}
-        ).fetchall()
-        history = [{"message_text": r[0], "is_from_agent": r[1]} for r in history_res]
-        history.reverse()
-
-        agent_response_text = services.generate_agent_conversation_response(agent[1], history, user_question)
-
-        db.execute(
-            text("""
-                INSERT INTO agent_conversations (user_id, agent_id, message_text, is_from_agent, is_read)
-                VALUES (:uid, :aid, :msg, TRUE, FALSE)
-            """),
-            {"uid": session['user_id'], "aid": agent_id, "msg": agent_response_text}
-        )
-        db.commit()
-        
-        return jsonify({"success": True, "response": agent_response_text})
-    except Exception as e:
-        db.rollback()
-        return jsonify({"error": str(e)}), 500
     finally:
         db.close()

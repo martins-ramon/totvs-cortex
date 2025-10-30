@@ -13,26 +13,16 @@ def init_db():
     """Cria as tabelas no banco de dados se elas não existirem."""
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        
         conn.commit()
-        
         conn.execute(text("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY, email VARCHAR(255) UNIQUE NOT NULL, password_hash VARCHAR(255) NOT NULL,
-            name VARCHAR(255) NOT NULL, company VARCHAR(255) NOT NULL, phone VARCHAR(50),
-            slack_user_id TEXT, manager_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-            mini_bio TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, profile_photo BYTEA,
-            name_normalized TEXT
-        )"""))
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY, email VARCHAR(255) UNIQUE NOT NULL, password_hash VARCHAR(255) NOT NULL,
+                name VARCHAR(255) NOT NULL, company VARCHAR(255) NOT NULL, phone VARCHAR(50),
+                slack_user_id TEXT, manager_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                mini_bio TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, profile_photo BYTEA
+            )"""))
         conn.commit()
-
-        conn.execute(text("""
-        CREATE INDEX IF NOT EXISTS idx_users_name_normalized
-        ON users (name_normalized);
-        """))
-        conn.commit()
-        
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS feedbacks (
                 id SERIAL PRIMARY KEY, employee_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -100,40 +90,4 @@ def init_db():
                 is_read BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )"""))
-        conn.commit()
-
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS agents (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(100) NOT NULL,
-                personality_prompt TEXT NOT NULL,
-                type VARCHAR(50) UNIQUE NOT NULL,
-                is_active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )"""))
-        conn.commit()
-
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS agent_conversations (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-                message_text TEXT NOT NULL,
-                is_from_agent BOOLEAN DEFAULT FALSE,
-                is_proactive_insight BOOLEAN DEFAULT FALSE,
-                is_read BOOLEAN DEFAULT FALSE,
-                related_action_data JSONB,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            )"""))
-        conn.commit()
-
-        conn.execute(text("""
-            INSERT INTO agents (name, personality_prompt, type)
-            VALUES (
-                'Momentum',
-                'Você é Momentum, um mentor de carreira focado em alta performance. Você analisa feedbacks e reuniões passadas para encontrar padrões e oportunidades de crescimento. Você é proativo, encorajador e suas sugestões são sempre acionáveis. Responda em português brasileiro.',
-                'career_mentor'
-            )
-            ON CONFLICT (type) DO NOTHING
-        """))
         conn.commit()
