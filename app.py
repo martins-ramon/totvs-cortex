@@ -3,6 +3,7 @@ from flask import Flask, send_from_directory
 from flask_cors import CORS
 from database import init_db
 from routes import api_bp
+from agent_runner import init_scheduler
 
 def create_app():
     """Cria e configura uma instância da aplicação Flask."""
@@ -29,6 +30,9 @@ app = create_app()
 
 # Inicializa o banco de dados (cria tabelas se não existirem)
 init_db()
+
+# Inicializa o scheduler de agentes proativos
+init_scheduler(app)
 
 if __name__ == '__main__':
     # Roda o servidor de desenvolvimento

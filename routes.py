@@ -650,3 +650,115 @@ def import_feedback():
         return jsonify({"success": False, "error": str(e)}), 500
     finally:
         db.close()
+
+@api_bp.route('/agents', methods=['GET'])
+def get_agents():
+    """Lista os agentes disponíveis e a contagem de mensagens não lidas."""
+    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = SessionLocal()
+    try:
+        agents = db.execute(text("SELECT id, name, type FROM agents WHERE is_active = TRUE")).fetchall()
+        
+        agent_list = []
+        for agent in agents:
+            unread_count_res = db.execute(
+                text("SELECT COUNT(id) FROM agent_conversations WHERE user_id = :uid AND agent_id = :aid AND is_read = FALSE"),
+                {"uid": session['user_id'], "aid": agent[0]}
+            ).fetchone()
+            agent_list.append({
+                "id": agent[0],
+                "name": agent[1],
+                "type": agent[2],
+                "unread_count": unread_count_res[0] if unread_count_res else 0
+            })
+        return jsonify({"agents": agent_list})
+    finally:
+        db.close()
+
+@api_bp.route('/agents/<int:agent_id>/conversation', methods=['GET'])
+def get_agent_conversation(agent_id):
+    """Busca o histórico de conversa com um agente."""
+    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = SessionLocal()
+    try:
+        conv_res = db.execute(
+            text("""
+                SELECT id, message_text, is_from_agent, is_proactive_insight, is_read, related_action_data, created_at 
+                FROM agent_conversations
+                WHERE user_id = :uid AND agent_id = :aid
+                ORDER BY created_at ASC
+            """),
+            {"uid": session['user_id'], "aid": agent_id}
+        ).fetchall()
+        
+        conversation = [
+            {"id": r[0], "text": r[1], "is_from_agent": r[2], "is_proactive": r[3], "is_read": r[4], "action_data": r[5], "created_at": r[6].isoformat()}
+            for r in conv_res
+        ]
+        return jsonify({"conversation": conversation})
+    finally:
+        db.close()
+
+@api_bp.route('/agents/<int:agent_id>/conversation/mark_read', methods=['POST'])
+def mark_agent_conversation_as_read(agent_id):
+    """Marca todas as mensagens de um agente como lidas."""
+    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
+    db = SessionLocal()
+    try:
+        db.execute(
+            text("UPDATE agent_conversations SET is_read = TRUE WHERE user_id = :uid AND agent_id = :aid"),
+            {"uid": session['user_id'], "aid": agent_id}
+        )
+        db.commit()
+        return jsonify({"success": True})
+    finally:
+        db.close()
+
+@api_bp.route('/agents/<int:agent_id>/message', methods=['POST'])
+def post_agent_message(agent_id):
+    """Envia uma mensagem para um agente e obtém uma resposta."""
+    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
+    data = request.json
+    user_question = data.get('question')
+    if not user_question:
+        return jsonify({"error": "Question is required"}), 400
+
+    db = SessionLocal()
+    try:
+        db.execute(
+            text("""
+                INSERT INTO agent_conversations (user_id, agent_id, message_text, is_from_agent, is_read)
+                VALUES (:uid, :aid, :msg, FALSE, TRUE)
+            """),
+            {"uid": session['user_id'], "aid": agent_id, "msg": user_question}
+        )
+        db.commit()
+
+        agent = db.execute(text("SELECT id, personality_prompt FROM agents WHERE id = :aid"), {"aid": agent_id}).fetchone()
+        if not agent:
+            return jsonify({"error": "Agent not found"}), 404
+        
+        history_res = db.execute(
+            text("SELECT message_text, is_from_agent FROM agent_conversations WHERE user_id = :uid AND agent_id = :aid ORDER BY created_at DESC LIMIT 5"),
+            {"uid": session['user_id'], "aid": agent_id}
+        ).fetchall()
+        history = [{"message_text": r[0], "is_from_agent": r[1]} for r in history_res]
+        history.reverse()
+
+        agent_response_text = services.generate_agent_conversation_response(agent[1], history, user_question)
+
+        db.execute(
+            text("""
+                INSERT INTO agent_conversations (user_id, agent_id, message_text, is_from_agent, is_read)
+                VALUES (:uid, :aid, :msg, TRUE, FALSE)
+            """),
+            {"uid": session['user_id'], "aid": agent_id, "msg": agent_response_text}
+        )
+        db.commit()
+        
+        return jsonify({"success": True, "response": agent_response_text})
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
