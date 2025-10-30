@@ -38,12 +38,7 @@ function showApp() {
     document.getElementById('user-name').textContent = currentUser.name;
     document.getElementById('user-company').textContent = currentUser.company;
 
-    renderChatWidget();
-    const chatWidget = document.getElementById('chat-widget');
-    if (chatWidget) {
-        chatWidget.style.display = 'block';
-    }
-
+    initAgentDock();
     loadSidebarUserPhoto();
     fetchInitialNotifications();
 
@@ -1057,88 +1052,240 @@ function previewPhoto(event) {
     }
 }
 
-// --- CHAT WIDGET ---
+// --- AGENT DOCK (Sistema de Agentes IA) ---
 
-function renderChatWidget() {
-    const container = document.getElementById('chat-widget');
-    if (!container || container.innerHTML.trim() !== '') return;
+let agentState = {
+    agents: [],
+    currentAgent: null,
+    isDockOpen: false,
+    isConversationOpen: false,
+    agentPollInterval: null
+};
 
-    const chatHTML = `
-        <button id="chat-button" class="chat-button" onclick="toggleChat()">
-            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="#FFFFFF">
-                <path d="M0 0h24v24H0V0z" fill="none"/>
-                <path d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V4c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z"/>
-            </svg>
-        </button>
-        <div id="chat-window" class="chat-window" style="display: none;">
-            <div class="chat-header">
-                <h3>Assistente Cortex</h3>
-                <button class="chat-close" onclick="toggleChat()">×</button>
-            </div>
-            <div id="chat-messages" class="chat-messages">
-                <div class="chat-message bot-message">
-                    Olá! Como posso ajudar você a encontrar insights sobre seu time hoje?
-                </div>
-            </div>
-            <div class="chat-input-container">
-                <input type="text" id="chat-input" placeholder="Pergunte sobre feedbacks...">
-                <button class="chat-send-btn" onclick="sendChatMessage()">Enviar</button>
-            </div>
-        </div>
-    `;
-
-    container.innerHTML = chatHTML;
-
-    const chatInput = document.getElementById('chat-input');
-    if (chatInput) {
-        chatInput.addEventListener('keydown', function(event) {
-            if (event.key === 'Enter') {
+async function initAgentDock() {
+    await loadAgents();
+    setupAgentPolling();
+    
+    const messageInput = document.getElementById('agent-message-input');
+    if (messageInput) {
+        messageInput.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
-                sendChatMessage();
+                sendAgentMessage();
             }
         });
     }
 }
 
-function toggleChat() {
-    const chatWindow = document.getElementById('chat-window');
-    const chatButton = document.getElementById('chat-button');
-    if (chatWindow.style.display === 'none' || chatWindow.style.display === '') {
-        chatWindow.style.display = 'flex';
-        chatButton.style.display = 'none';
-    } else {
-        chatWindow.style.display = 'none';
-        chatButton.style.display = 'flex';
+async function loadAgents() {
+    try {
+        const response = await fetch('/api/agents', { credentials: 'include' });
+        const data = await response.json();
+        agentState.agents = data.agents || [];
+        renderAgentList();
+        updateAgentBadge();
+    } catch (error) {
+        console.error('Erro ao carregar agentes:', error);
     }
 }
 
-async function sendChatMessage() {
-    const input = document.getElementById('chat-input');
-    const question = input.value.trim();
-    if (!question) return;
-    const messagesContainer = document.getElementById('chat-messages');
-    messagesContainer.innerHTML += `<div class="chat-message user-message">${question}</div>`;
-    input.value = '';
-    messagesContainer.innerHTML += `<div class="chat-typing bot-message" id="typing-indicator"><span></span><span></span><span></span></div>`;
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+function renderAgentList() {
+    const agentList = document.getElementById('agent-list');
+    if (!agentList) return;
+    
+    if (agentState.agents.length === 0) {
+        agentList.innerHTML = '<div class="no-notifications">Nenhum agente disponível</div>';
+        return;
+    }
+    
+    agentList.innerHTML = agentState.agents.map(agent => `
+        <div class="agent-item" onclick="openAgent(${agent.id})">
+            <div class="agent-icon">🤖</div>
+            <div class="agent-info">
+                <h4>${agent.name}</h4>
+                <p>${agent.type === 'career_mentor' ? 'Mentor de Carreira' : agent.type}</p>
+            </div>
+            ${agent.unread_count > 0 ? `<span class="agent-badge">${agent.unread_count}</span>` : ''}
+        </div>
+    `).join('');
+}
 
+function updateAgentBadge() {
+    const totalUnread = agentState.agents.reduce((sum, agent) => sum + agent.unread_count, 0);
+    const badge = document.getElementById('agent-dock-badge');
+    if (badge) {
+        if (totalUnread > 0) {
+            badge.textContent = totalUnread;
+            badge.classList.remove('hidden');
+        } else {
+            badge.classList.add('hidden');
+        }
+    }
+}
+
+function toggleAgentDock() {
+    const panel = document.getElementById('agent-dock-panel');
+    const toggle = document.getElementById('agent-dock-toggle');
+    agentState.isDockOpen = !agentState.isDockOpen;
+    
+    if (agentState.isDockOpen) {
+        panel.classList.remove('hidden');
+        toggle.style.display = 'none';
+        loadAgents();
+    } else {
+        panel.classList.add('hidden');
+        toggle.style.display = 'flex';
+        if (agentState.isConversationOpen) {
+            closeAgentConversation();
+        }
+    }
+}
+
+async function openAgent(agentId) {
+    const agent = agentState.agents.find(a => a.id === agentId);
+    if (!agent) return;
+    
+    agentState.currentAgent = agent;
+    agentState.isConversationOpen = true;
+    
+    document.getElementById('agent-list').style.display = 'none';
+    const conversation = document.getElementById('agent-conversation');
+    conversation.classList.remove('hidden');
+    
+    document.getElementById('conversation-agent-name').textContent = agent.name;
+    document.getElementById('conversation-agent-type').textContent = 
+        agent.type === 'career_mentor' ? 'Mentor de Carreira' : agent.type;
+    
+    await loadConversation(agentId);
+    await markConversationAsRead(agentId);
+}
+
+function closeAgentConversation() {
+    agentState.isConversationOpen = false;
+    document.getElementById('agent-conversation').classList.add('hidden');
+    document.getElementById('agent-list').style.display = 'flex';
+    agentState.currentAgent = null;
+}
+
+async function loadConversation(agentId) {
+    const messagesContainer = document.getElementById('conversation-messages');
+    messagesContainer.innerHTML = '<div class="loading-skeleton"><div class="skeleton-line"></div></div>';
+    
     try {
-        const response = await fetch('/api/chat', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        const response = await fetch(`/api/agents/${agentId}/conversation`, { credentials: 'include' });
+        const data = await response.json();
+        const messages = data.conversation || [];
+        
+        if (messages.length === 0) {
+            messagesContainer.innerHTML = `
+                <div class="message-item from-agent">
+                    Olá! Sou ${agentState.currentAgent.name}. Como posso ajudar você hoje?
+                </div>
+            `;
+        } else {
+            messagesContainer.innerHTML = messages.map(msg => {
+                const classes = ['message-item'];
+                if (msg.is_from_agent) classes.push('from-agent');
+                else classes.push('from-user');
+                if (msg.is_proactive) classes.push('proactive');
+                
+                return `
+                    <div class="${classes.join(' ')}">
+                        ${msg.text}
+                        <div class="message-timestamp">${new Date(msg.created_at).toLocaleString('pt-BR')}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    } catch (error) {
+        console.error('Erro ao carregar conversa:', error);
+        messagesContainer.innerHTML = '<div class="message-item from-agent">Erro ao carregar conversa.</div>';
+    }
+}
+
+async function markConversationAsRead(agentId) {
+    try {
+        await fetch(`/api/agents/${agentId}/conversation/mark_read`, {
+            method: 'POST',
+            credentials: 'include'
+        });
+        
+        const agent = agentState.agents.find(a => a.id === agentId);
+        if (agent) {
+            agent.unread_count = 0;
+            updateAgentBadge();
+            renderAgentList();
+        }
+    } catch (error) {
+        console.error('Erro ao marcar como lido:', error);
+    }
+}
+
+async function sendAgentMessage() {
+    const input = document.getElementById('agent-message-input');
+    const question = input.value.trim();
+    if (!question || !agentState.currentAgent) return;
+    
+    const messagesContainer = document.getElementById('conversation-messages');
+    messagesContainer.innerHTML += `
+        <div class="message-item from-user">
+            ${question}
+            <div class="message-timestamp">${new Date().toLocaleString('pt-BR')}</div>
+        </div>
+    `;
+    input.value = '';
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    
+    messagesContainer.innerHTML += '<div class="chat-typing" id="typing-indicator"><span></span><span></span><span></span></div>';
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    
+    try {
+        const response = await fetch(`/api/agents/${agentState.currentAgent.id}/message`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ question })
         });
         const data = await response.json();
-
-        console.log('Resposta recebida do /api/chat:', data);
         
         document.getElementById('typing-indicator').remove();
-        messagesContainer.innerHTML += `<div class="chat-message bot-message">${data[0].output || data.error || 'Desculpe, ocorreu um erro.'}</div>`;
+        
+        if (data.success && data.response) {
+            messagesContainer.innerHTML += `
+                <div class="message-item from-agent">
+                    ${data.response}
+                    <div class="message-timestamp">${new Date().toLocaleString('pt-BR')}</div>
+                </div>
+            `;
+        } else {
+            messagesContainer.innerHTML += `
+                <div class="message-item from-agent">
+                    Desculpe, não consegui processar sua pergunta.
+                </div>
+            `;
+        }
+        
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     } catch (error) {
-        document.getElementById('typing-indicator').remove();
-        messagesContainer.innerHTML += `<div class="chat-message bot-message">Não consegui processar sua pergunta. Tente novamente.</div>`;
+        console.error('Erro ao enviar mensagem:', error);
+        document.getElementById('typing-indicator')?.remove();
+        messagesContainer.innerHTML += '<div class="message-item from-agent">Erro ao enviar mensagem.</div>';
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
+}
+
+function setupAgentPolling() {
+    if (agentState.agentPollInterval) {
+        clearInterval(agentState.agentPollInterval);
+    }
+    
+    agentState.agentPollInterval = setInterval(() => {
+        if (!agentState.isDockOpen && currentUser) {
+            loadAgents();
+        }
+    }, 30000);
 }
 
 // --- PONTO DE ENTRADA DA APLICAÇÃO ---
