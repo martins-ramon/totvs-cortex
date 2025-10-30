@@ -1132,7 +1132,7 @@ async function sendChatMessage() {
         console.log('Resposta recebida do /api/chat:', data);
         
         document.getElementById('typing-indicator').remove();
-        messagesContainer.innerHTML += `<div class="chat-message bot-message">${data.output || data.error || 'Desculpe, ocorreu um erro.'}</div>`;
+        messagesContainer.innerHTML += `<div class="chat-message bot-message">${data[0].output || data.error || 'Desculpe, ocorreu um erro.'}</div>`;
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     } catch (error) {
         document.getElementById('typing-indicator').remove();

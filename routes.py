@@ -21,9 +21,11 @@ def register():
     data = request.json
     db = SessionLocal()
     try:
+        # Normalize o nome
+        normalized_name = services.normalize_text(data['name'])
         result = db.execute(
-            text("INSERT INTO users (email, password_hash, name, company, phone) VALUES (:email, :password_hash, :name, :company, :phone) RETURNING id"),
-            {"email": data['email'], "password_hash": hash_password(data['password']), "name": data['name'], "company": data.get('company', ''), "phone": data.get('phone', '')}
+            text("INSERT INTO users (email, password_hash, name, name_normalized, company, phone) VALUES (:email, :password_hash, :name, :normalized_name, :company, :phone) RETURNING id"),
+            {"email": data['email'], "password_hash": hash_password(data['password']), "name": data['name'], "normalized_name": normalized_name, "company": data.get('company', ''), "phone": data.get('phone', '')}
         )
         db.commit()
         user_id = result.fetchone()[0]
@@ -114,9 +116,11 @@ def update_profile():
     data = request.json
     db = SessionLocal()
     try:
+        # Normalize o nome
+        normalized_name = services.normalize_text(data['name'])
         db.execute(
-            text("UPDATE users SET name = :name, company = :company, phone = :phone, manager_id = :manager_id, mini_bio = :mini_bio WHERE id = :id"),
-            {"id": session['user_id'], "name": data['name'], "company": data.get('company', ''), "phone": data.get('phone', ''), "manager_id": data.get('manager_id'), "mini_bio": data.get('mini_bio')}
+            text("UPDATE users SET name = :name, name_normalized = :normalized_name, company = :company, phone = :phone, manager_id = :manager_id, mini_bio = :mini_bio WHERE id = :id"),
+            {"id": session['user_id'], "name": data['name'], "normalized_name": normalized_name, "company": data.get('company', ''), "phone": data.get('phone', ''), "manager_id": data.get('manager_id'), "mini_bio": data.get('mini_bio')}
         )
         db.commit()
         return jsonify({"success": True})
@@ -241,7 +245,7 @@ def user_insights(user_id):
             return jsonify({"error": "User not managed by you"}), 404
 
         last_feedback_res = db.execute(
-            text("SELECT description, feedback_date, created_at FROM feedbacks WHERE employee_id = :eid ORDER BY created_at DESC LIMIT 1"),
+            text("SELECT description, feedback_date, created_at FROM feedbacks WHERE employee_id = :eid ORDER BY feedback_date DESC LIMIT 1"),
             {"eid": user_id}
         ).fetchone()
 
@@ -590,5 +594,59 @@ def poll_notifications():
         ]
 
         return jsonify(notifications)
+    finally:
+        db.close()
+
+@api_bp.route('/import/feedback', methods=['POST'])
+def import_feedback():
+    """
+    Endpoint dedicado para importação de feedbacks em lote (ex: via n8n).
+    [ATENÇÃO] Esta versão não possui autenticação e está aberta.
+    Remova ou proteja este endpoint após o uso.
+    """
+
+    # 1. Obter Dados do JSON
+    data = request.json
+    employee_id = data.get('employee_id')
+    manager_id = data.get('manager_id')
+    description = data.get('description')
+    feedback_date = data.get('feedback_date') # Espera uma string de data (ex: "2023-10-25")
+
+    # 2. Validação
+    if not all([employee_id, manager_id, description, feedback_date]):
+        return jsonify({"error": "Campos obrigatórios ausentes: employee_id, manager_id, description, feedback_date"}), 400
+
+    db = SessionLocal()
+    try:
+        # 3. Gerar Embedding (reutilizando a lógica de 'services')
+        temporal_context = f"Feedback de {feedback_date}: {description}"
+        embedding = services.get_embedding(temporal_context) 
+
+        # 4. Inserir no Banco de Dados
+        result = db.execute(
+            text("""
+                INSERT INTO feedbacks (employee_id, manager_id, description, feedback_date, embedding) 
+                VALUES (:eid, :mid, :d, :fd, :e) 
+                RETURNING id
+            """),
+            {
+                "eid": employee_id, 
+                "mid": manager_id, 
+                "d": description, 
+                "fd": feedback_date, 
+                "e": str(embedding)
+            }
+        )
+        db.commit()
+
+        feedback_id = result.fetchone()[0]
+        return jsonify({"success": True, "feedback_id": feedback_id}), 201
+
+    except Exception as e:
+        db.rollback()
+        # Trata erros comuns, como IDs de usuário que não existem
+        if "foreign key constraint" in str(e).lower():
+             return jsonify({"success": False, "error": "ID de funcionário (employee_id) ou gestor (manager_id) inválido. O usuário não existe."}), 400
+        return jsonify({"success": False, "error": str(e)}), 500
     finally:
         db.close()

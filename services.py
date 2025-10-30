@@ -1,6 +1,7 @@
 import os
 import json
 from openai import OpenAI
+from unidecode import unidecode
 
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
@@ -96,6 +97,12 @@ def create_chat_response(question: str, context: str):
         temperature=0.7, max_tokens=500
     )
     return chat_response.choices[0].message.content
+
+def normalize_text(text: str) -> str:
+    """Converte texto para minúsculas e remove acentos."""
+    if not text:
+        return ""
+    return unidecode(text).lower()
 
 def generate_meeting_summary(transcription: str) -> str:
     """Gera um resumo com IA para uma transcrição de reunião."""
