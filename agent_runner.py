@@ -19,7 +19,9 @@ def get_user_context_for_agent(db, user_id):
     ).fetchall()
     meetings = [f"Data: {m[1]}, Resumo: {m[0]}" for m in meetings_res]
 
-    return f"Contexto de Feedbacks Recebidos:\n{'\n'.join(feedbacks)}\n\nContexto de Reuniões:\n{'\n'.join(meetings)}"
+    feedbacks_text = '\n'.join(feedbacks)
+    meetings_text = '\n'.join(meetings)
+    return f"Contexto de Feedbacks Recebidos:\n{feedbacks_text}\n\nContexto de Reuniões:\n{meetings_text}"
 
 def run_career_mentor_agent(user_id, agent):
     """Lógica proativa do agente Momentum."""
