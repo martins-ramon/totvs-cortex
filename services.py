@@ -114,3 +114,52 @@ def generate_meeting_summary(transcription: str) -> str:
         temperature=0.4,
     )
     return response.choices[0].message.content.strip()
+
+def generate_agent_insight(agent_prompt: str, context: str):
+    """Gera um insight proativo para um agente."""
+    prompt = f"""{agent_prompt}
+
+Abaixo está o contexto do usuário (feedbacks recentes e resumos de reunião):
+---
+{context}
+---
+
+Baseado *estritamente* neste contexto, identifique UMA oportunidade de crescimento ou UM problema recorrente.
+Gere uma mensagem proativa e acionável para o usuário.
+Se sua sugestão envolver outra pessoa (ex: o gestor), proponha uma ação que o usuário possa aprovar (human-in-the-loop).
+
+Responda em JSON no formato:
+{{
+    "proactive_message": "A mensagem que o usuário verá. Ex: 'Notei que o tema X apareceu em 3 reuniões. Minha sugestão é...'",
+    "action_data": {{ "action": "tipo_da_acao", "details": "..." }} ou null
+}}
+
+Exemplo de action_data se sugerir falar com gestor:
+{{ "action": "propose_to_manager", "proposal_text": "Texto da proposta para o gestor..." }}
+"""
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"Erro ao gerar insight do agente: {e}")
+        return None
+
+def generate_agent_conversation_response(agent_prompt: str, conversation_history: list, user_question: str):
+    """Gera uma resposta de chat para um agente (conversa reativa)."""
+    messages = [{"role": "system", "content": agent_prompt}]
+    
+    for msg in conversation_history[-5:]:
+        messages.append({"role": "assistant" if msg['is_from_agent'] else "user", "content": msg['message_text']})
+    
+    messages.append({"role": "user", "content": user_question})
+    
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        temperature=0.7, max_tokens=500
+    )
+    return response.choices[0].message.content
