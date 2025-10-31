@@ -1,68 +1,39 @@
-# app.py
 import os
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, send_from_directory
 from flask_cors import CORS
-from database import init_db_flask as init_db
-from agents_flask_routes import bp_agents
+from database import init_db
+from routes import api_bp
+from agent_runner import init_scheduler
 
 def create_app():
-    # Define /static como pasta de arquivos estáticos
-    app = Flask(__name__, static_folder="static", static_url_path="/static")
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    """Cria e configura uma instância da aplicação Flask."""
+    app = Flask(__name__, static_folder='static')
+    app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret-key-change-in-production')
 
-    # Inicializa banco e tabelas
-    init_db(app)
+    CORS(app, supports_credentials=True)
+    app.register_blueprint(api_bp)
 
-    # === Rotas de API ===
-    @app.route("/api/ping")
-    def ping():
-        return jsonify({"ok": True, "service": "flask"})
+    @app.route('/')
+    def index():
+        # Esta rota agora serve a aplicação principal protegida.
+        return send_from_directory('static', 'index.html')
 
-    # === Rotas de UI ===
-    @app.route("/")
-    def root():
-        # login.html como página inicial
-        login_path = os.path.join(app.static_folder, "login.html")
-        if os.path.exists(login_path):
-            return send_from_directory(app.static_folder, "login.html")
-        return "login.html não encontrado", 404
-
-    @app.route("/app")
-    def app_index():
-        # index.html como aplicação principal (SPA)
-        index_path = os.path.join(app.static_folder, "index.html")
-        if os.path.exists(index_path):
-            return send_from_directory(app.static_folder, "index.html")
-        return "index.html não encontrado", 404
-
-    # Serve qualquer outro asset (css, js, imagens)
-    @app.route("/static/<path:path>")
-    def static_proxy(path):
-        file_path = os.path.join(app.static_folder, path)
-        if os.path.exists(file_path):
-            return send_from_directory(app.static_folder, path)
-        return "Arquivo não encontrado", 404
-
-    # Blueprint dos agentes (endpoints Flask)
-    app.register_blueprint(bp_agents)
-
-    # Outras rotas do projeto (opcional)
-    try:
-        from routes import init_routes
-        init_routes(app)
-    except Exception as e:
-        print(f"[app] routes.init_routes não encontrado (ok). Detalhe: {e}")
-
-    # from routes import api_bp
-    # app.register_blueprint(api_bp)
-
-    # from routes import bp_ops
-    # app.register_blueprint(bp_ops)
+    @app.route('/login')
+    def login_page():
+        # Nova rota para servir a página de login.
+        return send_from_directory('static', 'login.html')
 
     return app
 
+# Cria a instância da aplicação no nível do módulo para Gunicorn encontrar
 app = create_app()
 
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+# Inicializa o banco de dados (cria tabelas se não existirem)
+init_db()
+
+# Inicializa o scheduler de agentes proativos
+init_scheduler(app)
+
+if __name__ == '__main__':
+    # Roda o servidor de desenvolvimento
+    app.run(host='0.0.0.0', port=5000, debug=True)
