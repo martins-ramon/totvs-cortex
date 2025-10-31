@@ -53,6 +53,12 @@ def create_app():
     except Exception as e:
         print(f"[app] routes.init_routes não encontrado (ok). Detalhe: {e}")
 
+    # from routes import api_bp
+    # app.register_blueprint(api_bp)
+
+    # from routes import bp_ops
+    # app.register_blueprint(bp_ops)
+
     return app
 
 app = create_app()
