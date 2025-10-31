@@ -592,3 +592,18 @@ def poll_notifications():
         return jsonify(notifications)
     finally:
         db.close()
+
+bp_ops = Blueprint("bp_ops", __name__, url_prefix="/ops")
+
+@bp_ops.get("/version")
+def version():
+    return jsonify({"service": "cortex", "version": "0.1.0"})
+
+def init_routes(app):
+    app.register_blueprint(bp_ops)
+    # Aqui você pode registrar outros blueprints/rotas existentes:
+    # from meetings_routes import bp_meetings
+    # app.register_blueprint(bp_meetings)
+    # from feedbacks_routes import bp_feedbacks
+    # app.register_blueprint(bp_feedbacks)
+    return app
