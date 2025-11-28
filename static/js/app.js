@@ -1510,11 +1510,11 @@ function renderChatWidget() {
             </div>
             <div id="chat-messages" class="chat-messages">
                 <div class="chat-message bot-message">
-                    Olá! Como posso ajudar você a encontrar insights sobre seu time hoje?
+                    Olá. Sou seu copiloto de inteligência. O que vamos realizar agora?
                 </div>
             </div>
             <div class="chat-input-container">
-                <input type="text" id="chat-input" placeholder="Pergunte sobre feedbacks...">
+                <input type="text" id="chat-input" placeholder="Digite sua pergunta...">
                 <button class="chat-send-btn" onclick="sendChatMessage()">Enviar</button>
             </div>
         </div>
