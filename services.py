@@ -31,29 +31,37 @@ def get_embedding(text_to_embed: str):
     return response.data[0].embedding
 
 def generate_insights_from_feedback(employee_name: str, latest_feedback: dict, all_feedbacks: list):
-    """Gera insights de IA a partir do histórico de feedbacks."""
+    """Gera insights de IA usando a persona 'Sarah'."""
+
+    # Prepara o histórico (excluindo o último para não duplicar no contexto, se desejar, ou mantendo para contexto total)
+    # Aqui mantemos os 5 últimos cronológicos
     feedback_history = "\n\n---\n\n".join([
         f"Feedback de {fb['feedback_date']}:\n{fb['description']}"
-        for fb in all_feedbacks[-5:]
+        for fb in all_feedbacks[:15] # Pega os 15 mais recentes da lista já ordenada
     ])
-    prompt = f"""Analise os dados de feedback de {employee_name} e gere insights concisos em formato JSON, em PORTUGUÊS BRASILEIRO.
+
+    prompt = f"""Você é **Sarah**, uma Consultora de Liderança e Alta Performance (QI 150).
+Analise os dados de feedback de {employee_name}.
 
 Último Feedback ({latest_feedback['feedback_date']}):
 {latest_feedback['description']}
 
-Histórico de Feedbacks Anteriores:
+Histórico Recente:
 {feedback_history}
 
-Gere insights no seguinte formato JSON (TODO EM PORTUGUÊS):
+Gere um objeto JSON em Português do Brasil com insights estratégicos sobre este colaborador.
+O "resumo" deve ser uma síntese executiva do ÚLTIMO feedback informado acima.
+
+Formato JSON esperado:
 {{
-    "resumo": "Um parágrafo resumindo o último feedback de forma clara e objetiva",
+    "agent_name": "Sarah",
+    "resumo": "Síntese clara e direta do feedback de {latest_feedback['feedback_date']}.",
     "pontos_desenvolvimento": ["ponto 1", "ponto 2", "ponto 3"],
     "fortalezas": ["força 1", "força 2", "força 3"],
-    "risco_saida": {{"nivel": "baixo|medio|alto", "motivo": "explicação clara"}},
-    "acoes_pendencias": ["ação 1", "ação 2"] ou [] se não houver
-}}
+    "risco_saida": {{"nivel": "baixo|medio|alto", "motivo": "explicação baseada em fatos"}},
+    "acoes_pendencias": ["ação sugerida 1", "ação sugerida 2"]
+}}"""
 
-Seja específico, acionável e foque em padrões identificados nos feedbacks. Use SEMPRE português brasileiro."""
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -74,15 +82,40 @@ A biografia deve ser fluida, profissional e adequada para um perfil como o Linke
     )
     return response.choices[0].message.content
 
-def summarize_transcription(transcription: str):
-    """Resume a transcrição de uma reunião."""
-    prompt = f"""Resuma a seguinte transcrição de reunião em um parágrafo conciso em português do Brasil. Foque nos principais pontos discutidos, decisões tomadas e ações a serem seguidas.
+def summarize_transcription(transcription: str, meeting_date: str):
+    """
+    Gera um resumo estratégico de reunião usando a persona 'Angelo'.
+    """
+    # Garante formatação da data se possível
+    try:
+        # Tenta converter YYYY-MM-DD para DD/MM/YYYY se necessário
+        if '-' in meeting_date:
+            from datetime import datetime
+            dt = datetime.strptime(meeting_date, '%Y-%m-%d')
+            meeting_date = dt.strftime('%d/%m/%Y')
+    except:
+        pass # Mantém como veio se der erro
+
+    prompt = f"""Você é **Angelo**, Chief Operating Officer (COO) focado em Eficiência Radical (10x Productivity).
+    A data desta reunião é {meeting_date}.
+
+    Não faça uma ata passiva. Eu quero a **Destilação Executiva** desta conversa.
+
+    **Sua Saída deve conter:**
+    1. **O "Bottom Line":** Em uma frase, qual foi o resultado dessa reunião? (Ex: "Decidimos cancelar o projeto X para focar em Y").
+    2. **Decisões Blindadas:** O que foi martelado e não se discute mais.
+    3. **Pontos de Atrito:** Onde o time está patinando? Identifique gargalos citados.
+    4. **Plano de Ataque (Ações):** Quem faz o quê e para quando. Use bullet points diretos.
+
+    Se a reunião foi improdutiva, seja honesto e aponte isso no resumo.
 
 Transcrição:
 {transcription}"""
+
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3
     )
     return response.choices[0].message.content
 
@@ -104,62 +137,49 @@ def normalize_text(text: str) -> str:
         return ""
     return unidecode(text).lower()
 
-def generate_meeting_summary(transcription: str) -> str:
-    """Gera um resumo com IA para uma transcrição de reunião."""
-    client = OpenAI()
-    prompt = f"Resuma de forma objetiva e estruturada a reunião a seguir:\n\n{transcription}"
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
-    )
-    return response.choices[0].message.content.strip()
+def generate_feedback_summary(transcription: str):
+    """Gera um resumo estruturado de gestão usando a persona Sarah."""
+    prompt = f"""Você é **Sarah**, uma Consultora de Liderança (QI 150).
+Abaixo está a transcrição bruta de uma conversa de feedback ou anotações soltas de um gestor.
+Sua tarefa é transformar isso em um **Registro de Feedback Gerencial** claro, imparcial e estruturado.
 
-def generate_agent_insight(agent_prompt: str, context: str):
-    """Gera um insight proativo para um agente."""
-    prompt = f"""{agent_prompt}
+Transcrição:
+{transcription}
 
-Abaixo está o contexto do usuário (feedbacks recentes e resumos de reunião):
----
-{context}
----
+Saída (Texto corrido, profissional):
+Resuma os fatos principais, comportamentos observados e combinados feitos. Remova ruídos de fala."""
 
-Baseado *estritamente* neste contexto, identifique UMA oportunidade de crescimento ou UM problema recorrente.
-Gere uma mensagem proativa e acionável para o usuário.
-Se sua sugestão envolver outra pessoa (ex: o gestor), proponha uma ação que o usuário possa aprovar (human-in-the-loop).
-
-Responda em JSON no formato:
-{{
-    "proactive_message": "A mensagem que o usuário verá. Ex: 'Notei que o tema X apareceu em 3 reuniões. Minha sugestão é...'",
-    "action_data": {{ "action": "tipo_da_acao", "details": "..." }} ou null
-}}
-
-Exemplo de action_data se sugerir falar com gestor:
-{{ "action": "propose_to_manager", "proposal_text": "Texto da proposta para o gestor..." }}
-"""
-    try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"}
-        )
-        return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        print(f"Erro ao gerar insight do agente: {e}")
-        return None
-
-def generate_agent_conversation_response(agent_prompt: str, conversation_history: list, user_question: str):
-    """Gera uma resposta de chat para um agente (conversa reativa)."""
-    messages = [{"role": "system", "content": agent_prompt}]
-    
-    for msg in conversation_history[-5:]:
-        messages.append({"role": "assistant" if msg['is_from_agent'] else "user", "content": msg['message_text']})
-    
-    messages.append({"role": "user", "content": user_question})
-    
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.7, max_tokens=500
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content
+
+def generate_employee_message(manager_notes: str, transcription: str, employee_name: str):
+    """
+    Gera mensagem de desenvolvimento (Sarah) personalizada com o nome do funcionário.
+    """
+    context = f"Notas do Gestor: {manager_notes}\n"
+    if transcription:
+        context += f"Contexto da Conversa: {transcription}"
+
+    prompt = f"""Você é **Sarah**, Chief People Officer (CPO) pessoal deste gestor.
+    Sua missão: Transformar anotações brutas em uma comunicação de liderança inspiradora e de alto impacto (Nível Executivo).
+
+    Colaborador: **{employee_name}**
+    Dados Brutos:
+    {context}
+
+    **Sua Estrutura de Resposta (Growth Mindset):**
+    1. **Abertura Empática:** Conecte-se com o colaborador.
+    2. **O "Unlock" (Fortalezas):** Não apenas elogie, mostre como o talento dele impacta o negócio (Gatilho de Propósito).
+    3. **O Desafio (Pontos de Melhoria):** Não aponte erros. Apresente o próximo nível de performance que ele pode atingir. Seja direta, mas encorajadora.
+    4. **Call to Action (Próximos Passos):** Sugira 1 ação prática para a próxima semana.
+
+    Use formatação rica, parágrafos curtos e tom de "Coach de Elite"."""
+
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content

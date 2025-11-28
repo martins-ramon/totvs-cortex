@@ -38,7 +38,12 @@ function showApp() {
     document.getElementById('user-name').textContent = currentUser.name;
     document.getElementById('user-company').textContent = currentUser.company;
 
-    initAgentDock();
+    renderChatWidget();
+    const chatWidget = document.getElementById('chat-widget');
+    if (chatWidget) {
+        chatWidget.style.display = 'block';
+    }
+
     loadSidebarUserPhoto();
     fetchInitialNotifications();
 
@@ -97,7 +102,7 @@ function setActiveNav(viewName) {
     document.querySelectorAll('.view').forEach(view => view.style.display = 'none');
 
     // ✅ REMOVIDO 'notifications' do mapa de navegação
-    const viewMap = { 'my-team': 0, 'feedbacks': 1, 'meetings': 2 }; 
+    const viewMap = { 'my-team': 0, 'feedbacks': 1, 'meetings': 2, 'digital-staff': 3 }; 
     const navItems = document.querySelectorAll('.sidebar-nav .nav-item');
     if (viewMap[viewName] !== undefined && navItems[viewMap[viewName]]) {
         navItems[viewMap[viewName]].classList.add('active');
@@ -273,31 +278,55 @@ function createAutocomplete(
 let latestNotificationId = null;
 
 async function pollForNotifications() {
+    // Se não tivermos um ID de referência inicial, não fazemos polling para evitar inconsistência
     if (!latestNotificationId) return;
 
     try {
         const response = await fetch(`/api/notifications/poll?since_id=${latestNotificationId}`);
         if (!response.ok) {
-            console.error(`Erro na requisição de polling: ${response.status}`);
+            // Silencia erros de console comuns em polling para não poluir, a menos que seja crítico
+            if (response.status !== 304) console.error(`Erro polling: ${response.status}`);
             return;
         }
 
         const newNotifications = await response.json();
 
         if (newNotifications && newNotifications.length > 0) {
-            console.log(`Recebidas ${newNotifications.length} novas notificações.`);
+            let listChanged = false;
 
-            newNotifications.reverse().forEach(notification => {
-                allNotifications.unshift(notification);
-                showToast(notification.message, 'info', notification.title);
+            // Itera sobre as novas notificações recebidas
+            newNotifications.forEach(notification => {
+                // ✅ CORREÇÃO: Verifica se este ID já existe na lista local
+                const alreadyExists = allNotifications.some(n => n.id === notification.id);
+
+                if (!alreadyExists) {
+                    // Se não existe, adiciona ao topo da lista
+                    allNotifications.unshift(notification);
+
+                    // Exibe o Toast apenas se for realmente nova na tela
+                    // Se for do tipo AI, usa o título do agente, senão o título padrão
+                    const toastTitle = notification.agent_name ? `🤖 ${notification.agent_name}` : notification.title;
+                    showToast(notification.message, 'info', toastTitle);
+
+                    listChanged = true;
+                }
             });
 
-            // ✅ ALTERADO: Atualiza o ID da última notificação vista
-            latestNotificationId = allNotifications[0].id;
+            if (listChanged) {
+                // ✅ GARANTIA: Reordena a lista completa por ID (do maior/recente para o menor)
+                // Isso corrige qualquer problema visual de ordem
+                allNotifications.sort((a, b) => b.id - a.id);
 
-            const unreadCount = allNotifications.filter(n => !n.is_read).length;
-            updateNotificationBadge(unreadCount);
-            renderNotificationsPanel();
+                // Atualiza o ponteiro do ID mais recente baseado na lista sanitizada
+                latestNotificationId = allNotifications[0].id;
+
+                // Recalcula o badge baseado na lista única (sem duplicados)
+                const unreadCount = allNotifications.filter(n => !n.is_read).length;
+                updateNotificationBadge(unreadCount);
+
+                // Atualiza a interface
+                renderNotificationsPanel();
+            }
         }
     } catch (error) {
         console.error('Erro durante o polling de notificações:', error);
@@ -339,14 +368,13 @@ function updateNotificationBadge(count) {
 function renderNotificationsPanel() {
     const body = document.getElementById('notifications-body');
 
-    // ✅ ALTERADO: Renderiza TODAS as notificações, não apenas as recentes
     if (allNotifications.length === 0) {
         body.innerHTML = '<div class="no-notifications">Nenhuma notificação.</div>';
         return;
     }
 
     body.innerHTML = allNotifications.map(n => `
-        <div class="notification-item ${!n.is_read ? 'unread' : ''}" onclick="handleNotificationClick(${n.id}, '${n.link}')">
+        <div class="notification-item ${!n.is_read ? 'unread' : ''}" onclick="handleNotificationClick(${n.id}, '${n.link || ''}')">
             <strong>${n.title}</strong>
             <p>${n.message}</p>
             <small>${new Date(n.created_at).toLocaleString('pt-BR')}</small>
@@ -356,16 +384,88 @@ function renderNotificationsPanel() {
 
 async function handleNotificationClick(id, link) {
     const notification = allNotifications.find(n => n.id === id);
-    if (notification && !notification.is_read) {
-        await markNotificationAsRead(id);
+    if (!notification) return;
+
+    // Fecha o painel suspenso
+    document.getElementById('notifications-panel').style.display = 'none';
+
+    // Ao abrir, marcamos visualmente como lida (padrão de e-mail), 
+    // mas o usuário pode reverter com o toggle.
+    if (!notification.is_read) {
+        await toggleNotificationStatus(id, true); 
     }
 
-    if (link && link.startsWith('/meetings/')) {
-        const meetingId = link.split('/')[2];
-        // ✅ SIMPLIFICADO: Apenas abre o modal, sem mudar a view
-        viewMeeting(meetingId);
+    viewNotificationDetails(notification);
+}
+
+function viewNotificationDetails(notification) {
+    const modalBody = document.getElementById('modal-body');
+    const dateStr = new Date(notification.created_at).toLocaleString('pt-BR');
+
+    // Layout limpo e padrão para TODAS as notificações
+    // A complexidade visual de IA agora vive exclusivamente no Drawer da Staff Digital
+    const contentHTML = `
+        <h3 style="margin-bottom: 0.25rem; color: #1E293B; padding-right: 20px;">${notification.title}</h3>
+        <small style="color: #94A3B8; display: block; margin-bottom: 1.5rem; border-bottom: 1px solid #F1F5F9; padding-bottom: 1rem;">
+            Recebido em: ${dateStr}
+        </small>
+
+        <div style="color: #475569; line-height: 1.8; font-size: 1rem;">
+            ${notification.message.replace(/\n/g, '<br>')}
+        </div>
+    `;
+
+    const toggleHTML = `
+        <div class="toggle-wrapper">
+            <span class="toggle-label">Marcar como lida</span>
+            <label class="switch">
+                <input type="checkbox" id="notif-toggle-${notification.id}" 
+                    ${notification.is_read ? 'checked' : ''} 
+                    onchange="handleToggleChange(${notification.id}, this.checked)">
+                <span class="slider"></span>
+            </label>
+        </div>
+    `;
+
+    modalBody.innerHTML = contentHTML + toggleHTML;
+    document.getElementById('modal').style.display = 'flex';
+}
+
+async function handleToggleChange(id, isChecked) {
+    // Feedback visual imediato (Toast)
+    if (isChecked) {
+        showToast('Notificação marcada como lida.', 'success');
+    } else {
+        showToast('Notificação marcada como não lida.', 'info');
     }
-    document.getElementById('notifications-panel').style.display = 'none';
+
+    await toggleNotificationStatus(id, isChecked);
+}
+
+async function toggleNotificationStatus(id, isRead) {
+    try {
+        // 1. Atualiza estado local
+        const notification = allNotifications.find(n => n.id === id);
+        if (notification) notification.is_read = isRead;
+
+        // 2. Atualiza Badge do sino
+        const unreadCount = allNotifications.filter(n => !n.is_read).length;
+        updateNotificationBadge(unreadCount);
+
+        // 3. Atualiza a lista do painel em background
+        renderNotificationsPanel();
+
+        // 4. Persiste no Backend
+        await fetch(`/api/notifications/${id}/status`, { 
+            method: 'PUT', 
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ is_read: isRead })
+        });
+
+    } catch (error) {
+        console.error('Erro ao sincronizar status da notificação:', error);
+    }
 }
 
 async function markNotificationAsRead(id) {
@@ -437,16 +537,84 @@ async function loadUserInsights(userId) {
 function renderUserCard(item) {
     const userInitial = item.user_name.charAt(0).toUpperCase();
     const photoElement = `<div class="user-avatar-placeholder" id="avatar-${item.user_id}">${userInitial}</div>`;
+
     if (!item.latest_feedback) {
         return `<div class="insight-card" id="card-container-${item.user_id}"><div class="insight-header"><div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">${photoElement}<div><h3>${item.user_name}</h3><p>${item.company || 'Sem empresa'}</p></div></div></div><div class="no-data"><p>Nenhum feedback cadastrado ainda</p></div></div>`;
     }
+
     const insights = item.insights;
     const feedback = item.latest_feedback;
     const cardId = `card-${item.user_id}`;
+
+    // Tratamento de risco
     const riskLabels = { 'baixo': 'Baixo', 'medio': 'Médio', 'alto': 'Alto', 'low': 'Baixo', 'medium': 'Médio', 'high': 'Alto' };
-    const riskLevel = insights.risco_saida?.nivel || insights.turnover_risk?.level || 'baixo';
+    const riskLevelRaw = insights.risco_saida?.nivel || insights.turnover_risk?.level || 'baixo';
+    const riskLevel = riskLabels[riskLevelRaw.toLowerCase()] || 'Baixo';
     const riskReason = insights.risco_saida?.motivo || insights.turnover_risk?.reason || '';
-    return `<div class="insight-card" id="card-container-${item.user_id}"><div class="insight-header"><div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">${photoElement}<div><h3>${item.user_name}</h3><p>${item.company || 'Sem empresa'}</p></div></div><div class="feedback-date">${new Date((feedback.feedback_date || feedback.created_at).replace(/-/g, '/')).toLocaleDateString('pt-BR')}</div></div>${insights.resumo ? `<div class="insight-section"><h4>📝 Resumo do Último Feedback</h4><div class="feedback-summary">${insights.resumo}</div></div>` : ''}<div class="insight-section"><h4>⚠️ Risco de Saída</h4><p><span class="risk-badge risk-${riskLevel.toLowerCase().replace('é', 'e')}">${riskLabels[riskLevel.toLowerCase()] || riskLabels['baixo']}</span></p></div>${insights.acoes_pendencias && insights.acoes_pendencias.length > 0 ? `<div class="insight-section"><h4>🎯 Ações ou Pendências</h4>${insights.acoes_pendencias.map(action => `<div class="action-badge">${action}</div>`).join('')}</div>` : `<div class="insight-section"><h4>🎯 Ações ou Pendências</h4><p style="color: #94A3B8; font-size: 0.875rem;">Sem pendências</p></div>`}<div class="expand-btn" id="btn-${cardId}" onclick="toggleCard('${cardId}')">Ver detalhes <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg></div><div class="card-expanded" id="expanded-${cardId}"><div class="insight-section"><h4>💪 Fortalezas</h4><ul class="insight-list">${(insights.fortalezas || insights.strengths || []).map(s => `<li>${s}</li>`).join('')}</ul></div><div class="insight-section"><h4>📈 Pontos de Desenvolvimento</h4><ul class="insight-list">${(insights.pontos_desenvolvimento || insights.development_points || []).map(p => `<li>${p}</li>`).join('')}</ul></div><div class="insight-section"><h4>💡 Detalhes do Risco</h4><p style="font-size: 0.875rem; color: #64748B;">${riskReason}</p></div></div></div>`;
+    const riskClass = riskLevelRaw.toLowerCase().replace('é', 'e'); // normaliza 'médio' para css 'medio'
+
+    // Nome do Agente
+    const agentName = insights.agent_name || "Sarah";
+
+    return `
+    <div class="insight-card" id="card-container-${item.user_id}">
+        <div class="insight-header">
+            <div class="employee-info" style="display: flex; align-items: center; gap: 1rem;">
+                ${photoElement}
+                <div>
+                    <h3>${item.user_name}</h3>
+                    <p>${item.company || 'Sem empresa'}</p>
+                </div>
+            </div>
+            <div style="text-align: right;">
+                <div class="feedback-date">${new Date(feedback.feedback_date.replace(/-/g, '/')).toLocaleDateString('pt-BR')}</div>
+                <div style="font-size: 0.7rem; color: #6366F1; font-weight: 600; margin-top: 4px;">🤖 ${agentName}</div>
+            </div>
+        </div>
+
+        ${insights.resumo ? `
+        <div class="insight-section">
+            <h4>📝 Resumo do Último Feedback</h4>
+            <div class="feedback-summary">${insights.resumo}</div>
+        </div>` : ''}
+
+        <div class="insight-section">
+            <h4>⚠️ Risco de Saída</h4>
+            <p><span class="risk-badge risk-${riskClass}">${riskLevel}</span></p>
+        </div>
+
+        <div class="insight-section">
+            <h4>🎯 Ações Sugeridas</h4>
+            ${(insights.acoes_pendencias || []).length > 0 
+                ? (insights.acoes_pendencias || []).map(action => `<div class="action-badge">${action}</div>`).join('')
+                : `<p style="color: #94A3B8; font-size: 0.875rem;">Nenhuma ação pendente</p>`
+            }
+        </div>
+
+        <div class="expand-btn" id="btn-${cardId}" onclick="toggleCard('${cardId}')">
+            Ver análise completa <svg fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"></path></svg>
+        </div>
+
+        <div class="card-expanded" id="expanded-${cardId}">
+            <div class="insight-section">
+                <h4>💪 Fortalezas</h4>
+                <ul class="insight-list">
+                    ${(insights.fortalezas || []).map(s => `<li>${s}</li>`).join('')}
+                </ul>
+            </div>
+            <div class="insight-section">
+                <h4>📈 Pontos de Desenvolvimento</h4>
+                <ul class="insight-list">
+                    ${(insights.pontos_desenvolvimento || []).map(p => `<li>${p}</li>`).join('')}
+                </ul>
+            </div>
+            ${riskReason ? `
+            <div class="insight-section">
+                <h4>💡 Contexto do Risco</h4>
+                <p style="font-size: 0.875rem; color: #64748B; background: #FFF1F2; padding: 0.75rem; border-radius: 6px; border-left: 3px solid #F43F5E;">${riskReason}</p>
+            </div>` : ''}
+        </div>
+    </div>`;
 }
 
 // --- VIEW: FEEDBACKS ---
@@ -456,14 +624,241 @@ let selectedUserForFeedback = null;
 async function showFeedbacks() {
     setActiveNav('feedbacks');
     document.getElementById('feedbacks-view').style.display = 'block';
-    const form = document.getElementById('feedback-form');
-    form.reset();
-    document.getElementById('feedback-date').value = new Date().toISOString().split('T')[0];
-    document.getElementById('last-feedback-info').style.display = 'none';
-    const submitButton = form.querySelector('button[type="submit"]');
-    submitButton.textContent = 'Salvar Feedback com IA';
-    submitButton.onclick = (event) => submitFeedback(event);
-    await loadManagedUsersForFeedback();
+
+    const container = document.getElementById('feedbacks-content');
+    container.innerHTML = '<div class="loading">Verificando permissões...</div>';
+
+    try {
+        // Verifica se é gestor tentando carregar liderados
+        const response = await fetch('/api/managed-users', { credentials: 'include' });
+        const data = await response.json();
+
+        // --- VISÃO DE GESTOR (Tem liderados) ---
+        if (data.managed_users && data.managed_users.length > 0) {
+            renderManagerFeedbackView(data.managed_users);
+        } else {
+            // --- VISÃO DE COLABORADOR (Não tem liderados) ---
+            await renderEmployeeFeedbackView();
+        }
+    } catch (error) {
+        console.error(error);
+        container.innerHTML = '<div class="no-data">Erro ao carregar módulo de feedbacks.</div>';
+    }
+}
+
+// --- VISÃO GESTOR ---
+function renderManagerFeedbackView(managedUsers) {
+    const container = document.getElementById('feedbacks-content');
+    container.innerHTML = `
+        <form id="feedback-form">
+            <div class="form-group">
+                <label>Selecionar Funcionário *</label>
+                <div id="feedback-user-container" class="autocomplete-wrapper"></div>
+                <div id="last-feedback-info" style="display: none; margin-top: 0.5rem;">
+                    <small style="color: #64748B;">Último feedback: <span id="last-feedback-date"></span></small>
+                    <button type="button" onclick="showFeedbackHistory()" class="btn-link" style="margin-left: 1rem;">Ver histórico</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Data do Feedback *</label>
+                <input type="date" id="feedback-date" class="form-control" value="${new Date().toISOString().split('T')[0]}" required>
+            </div>
+
+            <div class="form-group" style="background: #F8FAFC; padding: 1rem; border-radius: 8px; border: 1px dashed #CBD5E1;">
+                <label>Transcrição / Anotações Brutas (Opcional)</label>
+                <textarea id="feedback-transcription" class="form-control" rows="4" placeholder="Cole a transcrição da reunião ou anotações rápidas aqui..."></textarea>
+                <button type="button" onclick="generateFeedbackSummary(event)" class="btn-ai-action" style="margin-top: 0.75rem;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z" />
+                    </svg>
+                    ✨ Sarah: Extrair Inteligência
+                </button>
+            </div>
+
+            <div class="form-group">
+                <label>Registro Gerencial (Visão do Gestor) *</label>
+                <textarea id="feedback-description" class="form-control" rows="6" placeholder="O registro oficial técnico e comportamental..." required></textarea>
+            </div>
+
+            <div class="form-group" style="background: #F0FDF4; padding: 1rem; border-radius: 8px; border: 1px solid #BBF7D0;">
+                <label style="color: #15803D;">Feedback para o Participante (Visível para ele)</label>
+                <textarea id="feedback-employee-msg" class="form-control" rows="6" placeholder="Mensagem de desenvolvimento para o colaborador ler..."></textarea>
+                <button type="button" onclick="generateEmployeeMsg(event)" class="btn-ai-action" style="margin-top: 0.75rem;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd" />
+                    </svg>
+                    ✍️ Sarah: Rascunhar PDI
+                </button>
+            </div>
+
+            <button type="submit" class="btn-primary btn-large">Salvar Feedback</button>
+        </form>
+    `;
+
+    // Re-inicializa o autocomplete e o listener do form
+    createAutocomplete('feedback-user-container', managedUsers, {
+        placeholder: 'Digite para buscar um liderado...',
+        isMulti: false,
+        onSelectionChange: (selectedId) => {
+            selectedUserForFeedback = selectedId;
+            if (selectedId) loadUserLastFeedback();
+            else document.getElementById('last-feedback-info').style.display = 'none';
+        }
+    });
+
+    document.getElementById('feedback-form').addEventListener('submit', submitFeedbackUpdated);
+}
+
+// --- VISÃO COLABORADOR ---
+async function renderEmployeeFeedbackView() {
+    const container = document.getElementById('feedbacks-content');
+    container.innerHTML = '<div class="loading">Carregando seus feedbacks recebidos...</div>';
+
+    try {
+        const response = await fetch('/api/my-received-feedbacks', { credentials: 'include' });
+        const data = await response.json();
+
+        if (data.feedbacks && data.feedbacks.length > 0) {
+            container.innerHTML = `
+                <h3 style="margin-bottom: 1.5rem; color: #1E293B;">Feedbacks Recebidos</h3>
+                <div class="timeline-container">
+                    ${data.feedbacks.map(fb => `
+                        <div class="insight-card" style="margin-bottom: 1.5rem;">
+                            <div class="insight-header">
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <div class="user-avatar-placeholder" style="width: 32px; height: 32px; font-size: 0.9rem;">${fb.manager.charAt(0)}</div>
+                                    <div>
+                                        <div style="font-weight: 600; font-size: 0.9rem;">${fb.manager}</div>
+                                        <div style="font-size: 0.75rem; color: #64748B;">Gestor</div>
+                                    </div>
+                                </div>
+                                <div class="feedback-date">${new Date(fb.date).toLocaleDateString('pt-BR')}</div>
+                            </div>
+                            <div style="margin-top: 1rem; color: #334155; line-height: 1.6; white-space: pre-wrap;">${fb.message}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } else {
+            container.innerHTML = `
+                <div class="no-data">
+                    <p>Você ainda não recebeu feedbacks registrados na plataforma.</p>
+                </div>`;
+        }
+    } catch (error) {
+        container.innerHTML = '<div class="no-data">Erro ao carregar feedbacks.</div>';
+    }
+}
+
+// --- FUNÇÕES DE APOIO IA ---
+
+async function generateFeedbackSummary(event) {
+    const transcription = document.getElementById('feedback-transcription').value;
+    if (!transcription) { showToast('Insira uma transcrição primeiro.', 'warning'); return; }
+
+    const btn = event.target;
+    const originalText = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Sarah está resumindo...';
+
+    try {
+        const res = await fetch('/api/feedbacks/generate-summary', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ transcription })
+        });
+        const data = await res.json();
+        if (data.result) document.getElementById('feedback-description').value = data.result;
+    } catch(e) { showToast('Erro na IA', 'error'); } 
+    finally { btn.disabled = false; btn.textContent = originalText; }
+}
+
+async function generateEmployeeMsg(event) {
+    const description = document.getElementById('feedback-description').value;
+    const transcription = document.getElementById('feedback-transcription').value;
+
+    // ✅ CAPTURA DO NOME:
+    // O autocomplete cria um input com a classe .autocomplete-input dentro do container
+    const nameInput = document.querySelector('#feedback-user-container .autocomplete-input');
+    const employeeName = nameInput ? nameInput.value : '';
+
+    if (!description && !transcription) { 
+        showToast('Preencha o registro gerencial ou a transcrição para a Sarah analisar.', 'warning'); 
+        return; 
+    }
+
+    if (!employeeName) {
+        showToast('Selecione um funcionário para personalizar a mensagem.', 'warning');
+        return;
+    }
+
+    const btn = event.target;
+    const originalText = btn.textContent;
+    btn.disabled = true; 
+    btn.textContent = 'Sarah está escrevendo...';
+
+    try {
+        const res = await fetch('/api/feedbacks/generate-employee-msg', {
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ 
+                description, 
+                transcription,
+                employee_name: employeeName // ✅ Envia o nome
+            })
+        });
+        const data = await res.json();
+        if (data.result) {
+            document.getElementById('feedback-employee-msg').value = data.result;
+            showToast('Mensagem gerada com sucesso!', 'success');
+        }
+    } catch(e) { 
+        showToast('Erro ao gerar mensagem.', 'error'); 
+        console.error(e);
+    } finally { 
+        btn.disabled = false; 
+        btn.textContent = originalText; 
+    }
+}
+
+async function submitFeedbackUpdated(event) {
+    event.preventDefault();
+    const user_id = document.getElementById('feedback-user-container-value').value;
+    const feedback_date = document.getElementById('feedback-date').value;
+    const description = document.getElementById('feedback-description').value;
+    const transcription = document.getElementById('feedback-transcription').value;
+    const feedback_for_employee = document.getElementById('feedback-employee-msg').value;
+
+    if (!user_id || !feedback_date || !description) {
+        showToast('Campos obrigatórios: Usuário, Data e Registro Gerencial', 'warning');
+        return;
+    }
+
+    const button = event.target.querySelector('button[type="submit"]');
+    button.disabled = true; button.textContent = 'Salvando...';
+
+    try {
+        const response = await fetch('/api/feedbacks', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+            body: JSON.stringify({ 
+                user_id: parseInt(user_id), 
+                feedback_date, 
+                description,
+                transcription, 
+                feedback_for_employee 
+            })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Feedback salvo com sucesso!', 'success');
+            showFeedbacks(); // Recarrega
+        } else {
+            showToast('Erro ao salvar', 'error');
+        }
+    } catch (error) {
+        showToast('Erro de comunicação', 'error');
+    } finally {
+        button.disabled = false; button.textContent = 'Salvar Feedback';
+    }
 }
 
 async function loadManagedUsersForFeedback() {
@@ -575,29 +970,38 @@ async function editFeedback(feedbackId) {
     try {
         const response = await fetch(`/api/user/${selectedUserForFeedback}/feedbacks`, { credentials: 'include' });
         const data = await response.json();
+
         const feedback = data.feedbacks.find(f => f.id === feedbackId);
         if (!feedback) return;
-        closeModal();
 
-        const usersResponse = await fetch('/api/managed-users', { credentials: 'include' });
-        const usersData = await usersResponse.json();
-        createAutocomplete('feedback-user-container', usersData.managed_users, {
-            placeholder: 'Digite para buscar um liderado...',
-            isMulti: false,
-            initialValue: parseInt(selectedUserForFeedback),
-            onSelectionChange: (selectedId) => {
-                selectedUserForFeedback = selectedId;
-                if (selectedId) loadUserLastFeedback();
-                else document.getElementById('last-feedback-info').style.display = 'none';
-            }
-        });
+        closeModal(); // Fecha o histórico
 
-        document.getElementById('feedback-description').value = feedback.description;
+        // Preenche os campos do formulário principal
+        document.getElementById('feedback-description').value = feedback.description || '';
         document.getElementById('feedback-date').value = feedback.feedback_date.split('T')[0];
+
+        // ✅ Preenche os novos campos (verifica se o elemento existe na tela antes)
+        const transInput = document.getElementById('feedback-transcription');
+        if (transInput) transInput.value = feedback.transcription || '';
+
+        const empMsgInput = document.getElementById('feedback-employee-msg');
+        if (empMsgInput) empMsgInput.value = feedback.feedback_for_employee || '';
+
+        // Muda o comportamento do botão Salvar
         const submitButton = document.querySelector('#feedback-form button[type="submit"]');
         submitButton.textContent = 'Atualizar Feedback';
-        submitButton.onclick = (event) => updateFeedbackSubmit(event, feedbackId);
-        showToast('Feedback carregado para edição', 'info');
+
+        // Remove listener antigo (clonando) e adiciona o novo para evitar duplicidade de submit
+        const newBtn = submitButton.cloneNode(true);
+        submitButton.parentNode.replaceChild(newBtn, submitButton);
+
+        newBtn.onclick = (event) => updateFeedbackSubmit(event, feedbackId);
+
+        showToast('Feedback carregado para edição. Role para cima.', 'info');
+
+        // Rola suavemente para o topo do formulário
+        document.getElementById('feedback-form').scrollIntoView({ behavior: 'smooth' });
+
     } catch (error) {
         console.error('Failed to edit feedback:', error);
         showToast('Erro ao carregar feedback', 'error');
@@ -606,32 +1010,50 @@ async function editFeedback(feedbackId) {
 
 async function updateFeedbackSubmit(event, feedbackId) {
     event.preventDefault();
+
     const description = document.getElementById('feedback-description').value;
     const feedback_date = document.getElementById('feedback-date').value;
+    // ✅ Captura novos campos
+    const transcription = document.getElementById('feedback-transcription')?.value || '';
+    const feedback_for_employee = document.getElementById('feedback-employee-msg')?.value || '';
+
     if (!feedback_date || !description) {
-        showToast('Data e descrição são obrigatórios', 'warning');
+        showToast('Data e Registro Gerencial são obrigatórios', 'warning');
         return;
     }
-    const button = event.target.tagName === 'FORM' ? event.target.querySelector('button[type="submit"]') : event.target;
+
+    const button = event.target; // O botão que foi clicado
     button.disabled = true;
     button.textContent = 'Atualizando...';
+
     try {
         const response = await fetch(`/api/feedbacks/${feedbackId}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-            body: JSON.stringify({ description, feedback_date })
+            method: 'PUT', 
+            headers: { 'Content-Type': 'application/json' }, 
+            credentials: 'include',
+            body: JSON.stringify({ 
+                description, 
+                feedback_date,
+                transcription,
+                feedback_for_employee
+            })
         });
+
         const data = await response.json();
         if (data.success) {
             showToast('Feedback atualizado com sucesso!', 'success');
-            showFeedbacks();
+            // Reseta o estado do formulário recarregando a view
+            showFeedbacks(); 
         } else {
-            showToast('Erro ao atualizar feedback: ' + data.error, 'error');
+            showToast('Erro ao atualizar: ' + (data.error || ''), 'error');
+            button.disabled = false;
+            button.textContent = 'Atualizar Feedback';
         }
     } catch (error) {
-        console.error('Failed to update feedback:', error);
-        showToast('Erro ao atualizar feedback', 'error');
-    } finally {
+        console.error('Failed to update:', error);
+        showToast('Erro de comunicação', 'error');
         button.disabled = false;
+        button.textContent = 'Atualizar Feedback';
     }
 }
 
@@ -695,19 +1117,34 @@ async function loadUsersForSharing(initialValue = []) {
 
 async function generateSummary(event) {
     const transcription = document.getElementById('meeting-transcription').value;
+    const meetingDate = document.getElementById('meeting-date').value; // Pega a data do input
+
     if (!transcription.trim()) {
         showToast('Por favor, insira uma transcrição para gerar o resumo.', 'warning');
         return;
     }
+
+    // Validação simples para garantir que temos uma data para contextualizar
+    if (!meetingDate) {
+        showToast('Por favor, selecione a data da reunião antes de gerar o resumo.', 'warning');
+        return;
+    }
+
     const button = event.target;
     button.disabled = true;
     button.textContent = 'Gerando...';
+
     try {
         const response = await fetch('/api/meetings/summarize', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-            body: JSON.stringify({ transcription })
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            credentials: 'include',
+            // Envia a data junto com a transcrição
+            body: JSON.stringify({ transcription, meeting_date: meetingDate }) 
         });
+
         const data = await response.json();
+
         if (response.ok) {
             document.getElementById('meeting-summary').value = data.summary;
             showToast('Resumo gerado com sucesso!', 'success');
@@ -715,6 +1152,7 @@ async function generateSummary(event) {
             showToast(data.error || 'Erro ao gerar resumo', 'error');
         }
     } catch (error) {
+        console.error(error);
         showToast('Erro de comunicação ao gerar resumo', 'error');
     } finally {
         button.disabled = false;
@@ -1052,240 +1490,88 @@ function previewPhoto(event) {
     }
 }
 
-// --- AGENT DOCK (Sistema de Agentes IA) ---
+// --- CHAT WIDGET ---
 
-let agentState = {
-    agents: [],
-    currentAgent: null,
-    isDockOpen: false,
-    isConversationOpen: false,
-    agentPollInterval: null
-};
+function renderChatWidget() {
+    const container = document.getElementById('chat-widget');
+    if (!container || container.innerHTML.trim() !== '') return;
 
-async function initAgentDock() {
-    await loadAgents();
-    setupAgentPolling();
-    
-    const messageInput = document.getElementById('agent-message-input');
-    if (messageInput) {
-        messageInput.addEventListener('keydown', function(event) {
-            if (event.key === 'Enter' && !event.shiftKey) {
+    const chatHTML = `
+        <button id="chat-button" class="chat-button" onclick="toggleChat()">
+            <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px" fill="#FFFFFF">
+                <path d="M0 0h24v24H0V0z" fill="none"/>
+                <path d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V4c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z"/>
+            </svg>
+        </button>
+        <div id="chat-window" class="chat-window" style="display: none;">
+            <div class="chat-header">
+                <h3>Assistente Cortex</h3>
+                <button class="chat-close" onclick="toggleChat()">×</button>
+            </div>
+            <div id="chat-messages" class="chat-messages">
+                <div class="chat-message bot-message">
+                    Olá! Como posso ajudar você a encontrar insights sobre seu time hoje?
+                </div>
+            </div>
+            <div class="chat-input-container">
+                <input type="text" id="chat-input" placeholder="Pergunte sobre feedbacks...">
+                <button class="chat-send-btn" onclick="sendChatMessage()">Enviar</button>
+            </div>
+        </div>
+    `;
+
+    container.innerHTML = chatHTML;
+
+    const chatInput = document.getElementById('chat-input');
+    if (chatInput) {
+        chatInput.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
                 event.preventDefault();
-                sendAgentMessage();
+                sendChatMessage();
             }
         });
     }
 }
 
-async function loadAgents() {
-    try {
-        const response = await fetch('/api/agents', { credentials: 'include' });
-        const data = await response.json();
-        agentState.agents = data.agents || [];
-        renderAgentList();
-        updateAgentBadge();
-    } catch (error) {
-        console.error('Erro ao carregar agentes:', error);
-    }
-}
-
-function renderAgentList() {
-    const agentList = document.getElementById('agent-list');
-    if (!agentList) return;
-    
-    if (agentState.agents.length === 0) {
-        agentList.innerHTML = '<div class="no-notifications">Nenhum agente disponível</div>';
-        return;
-    }
-    
-    agentList.innerHTML = agentState.agents.map(agent => `
-        <div class="agent-item" onclick="openAgent(${agent.id})">
-            <div class="agent-icon">🤖</div>
-            <div class="agent-info">
-                <h4>${agent.name}</h4>
-                <p>${agent.type === 'career_mentor' ? 'Mentor de Carreira' : agent.type}</p>
-            </div>
-            ${agent.unread_count > 0 ? `<span class="agent-badge">${agent.unread_count}</span>` : ''}
-        </div>
-    `).join('');
-}
-
-function updateAgentBadge() {
-    const totalUnread = agentState.agents.reduce((sum, agent) => sum + agent.unread_count, 0);
-    const badge = document.getElementById('agent-dock-badge');
-    if (badge) {
-        if (totalUnread > 0) {
-            badge.textContent = totalUnread;
-            badge.classList.remove('hidden');
-        } else {
-            badge.classList.add('hidden');
-        }
-    }
-}
-
-function toggleAgentDock() {
-    const panel = document.getElementById('agent-dock-panel');
-    const toggle = document.getElementById('agent-dock-toggle');
-    agentState.isDockOpen = !agentState.isDockOpen;
-    
-    if (agentState.isDockOpen) {
-        panel.classList.remove('hidden');
-        toggle.style.display = 'none';
-        loadAgents();
+function toggleChat() {
+    const chatWindow = document.getElementById('chat-window');
+    const chatButton = document.getElementById('chat-button');
+    if (chatWindow.style.display === 'none' || chatWindow.style.display === '') {
+        chatWindow.style.display = 'flex';
+        chatButton.style.display = 'none';
     } else {
-        panel.classList.add('hidden');
-        toggle.style.display = 'flex';
-        if (agentState.isConversationOpen) {
-            closeAgentConversation();
-        }
+        chatWindow.style.display = 'none';
+        chatButton.style.display = 'flex';
     }
 }
 
-async function openAgent(agentId) {
-    const agent = agentState.agents.find(a => a.id === agentId);
-    if (!agent) return;
-    
-    agentState.currentAgent = agent;
-    agentState.isConversationOpen = true;
-    
-    document.getElementById('agent-list').style.display = 'none';
-    const conversation = document.getElementById('agent-conversation');
-    conversation.classList.remove('hidden');
-    
-    document.getElementById('conversation-agent-name').textContent = agent.name;
-    document.getElementById('conversation-agent-type').textContent = 
-        agent.type === 'career_mentor' ? 'Mentor de Carreira' : agent.type;
-    
-    await loadConversation(agentId);
-    await markConversationAsRead(agentId);
-}
-
-function closeAgentConversation() {
-    agentState.isConversationOpen = false;
-    document.getElementById('agent-conversation').classList.add('hidden');
-    document.getElementById('agent-list').style.display = 'flex';
-    agentState.currentAgent = null;
-}
-
-async function loadConversation(agentId) {
-    const messagesContainer = document.getElementById('conversation-messages');
-    messagesContainer.innerHTML = '<div class="loading-skeleton"><div class="skeleton-line"></div></div>';
-    
-    try {
-        const response = await fetch(`/api/agents/${agentId}/conversation`, { credentials: 'include' });
-        const data = await response.json();
-        const messages = data.conversation || [];
-        
-        if (messages.length === 0) {
-            messagesContainer.innerHTML = `
-                <div class="message-item from-agent">
-                    Olá! Sou ${agentState.currentAgent.name}. Como posso ajudar você hoje?
-                </div>
-            `;
-        } else {
-            messagesContainer.innerHTML = messages.map(msg => {
-                const classes = ['message-item'];
-                if (msg.is_from_agent) classes.push('from-agent');
-                else classes.push('from-user');
-                if (msg.is_proactive) classes.push('proactive');
-                
-                return `
-                    <div class="${classes.join(' ')}">
-                        ${msg.text}
-                        <div class="message-timestamp">${new Date(msg.created_at).toLocaleString('pt-BR')}</div>
-                    </div>
-                `;
-            }).join('');
-        }
-        
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    } catch (error) {
-        console.error('Erro ao carregar conversa:', error);
-        messagesContainer.innerHTML = '<div class="message-item from-agent">Erro ao carregar conversa.</div>';
-    }
-}
-
-async function markConversationAsRead(agentId) {
-    try {
-        await fetch(`/api/agents/${agentId}/conversation/mark_read`, {
-            method: 'POST',
-            credentials: 'include'
-        });
-        
-        const agent = agentState.agents.find(a => a.id === agentId);
-        if (agent) {
-            agent.unread_count = 0;
-            updateAgentBadge();
-            renderAgentList();
-        }
-    } catch (error) {
-        console.error('Erro ao marcar como lido:', error);
-    }
-}
-
-async function sendAgentMessage() {
-    const input = document.getElementById('agent-message-input');
+async function sendChatMessage() {
+    const input = document.getElementById('chat-input');
     const question = input.value.trim();
-    if (!question || !agentState.currentAgent) return;
-    
-    const messagesContainer = document.getElementById('conversation-messages');
-    messagesContainer.innerHTML += `
-        <div class="message-item from-user">
-            ${question}
-            <div class="message-timestamp">${new Date().toLocaleString('pt-BR')}</div>
-        </div>
-    `;
+    if (!question) return;
+    const messagesContainer = document.getElementById('chat-messages');
+    messagesContainer.innerHTML += `<div class="chat-message user-message">${question}</div>`;
     input.value = '';
+    messagesContainer.innerHTML += `<div class="chat-typing bot-message" id="typing-indicator"><span></span><span></span><span></span></div>`;
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    
-    messagesContainer.innerHTML += '<div class="chat-typing" id="typing-indicator"><span></span><span></span><span></span></div>';
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    
+
     try {
-        const response = await fetch(`/api/agents/${agentState.currentAgent.id}/message`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
+        const response = await fetch('/api/chat', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
             body: JSON.stringify({ question })
         });
         const data = await response.json();
-        
+
+        console.log('Resposta recebida do /api/chat:', data);
+
         document.getElementById('typing-indicator').remove();
-        
-        if (data.success && data.response) {
-            messagesContainer.innerHTML += `
-                <div class="message-item from-agent">
-                    ${data.response}
-                    <div class="message-timestamp">${new Date().toLocaleString('pt-BR')}</div>
-                </div>
-            `;
-        } else {
-            messagesContainer.innerHTML += `
-                <div class="message-item from-agent">
-                    Desculpe, não consegui processar sua pergunta.
-                </div>
-            `;
-        }
-        
+        messagesContainer.innerHTML += `<div class="chat-message bot-message">${data[0].output || data.error || 'Desculpe, ocorreu um erro.'}</div>`;
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     } catch (error) {
-        console.error('Erro ao enviar mensagem:', error);
-        document.getElementById('typing-indicator')?.remove();
-        messagesContainer.innerHTML += '<div class="message-item from-agent">Erro ao enviar mensagem.</div>';
+        document.getElementById('typing-indicator').remove();
+        messagesContainer.innerHTML += `<div class="chat-message bot-message">Não consegui processar sua pergunta. Tente novamente.</div>`;
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
-}
-
-function setupAgentPolling() {
-    if (agentState.agentPollInterval) {
-        clearInterval(agentState.agentPollInterval);
-    }
-    
-    agentState.agentPollInterval = setInterval(() => {
-        if (!agentState.isDockOpen && currentUser) {
-            loadAgents();
-        }
-    }, 30000);
 }
 
 // --- PONTO DE ENTRADA DA APLICAÇÃO ---
@@ -1302,3 +1588,212 @@ document.addEventListener('DOMContentLoaded', () => {
         meetingForm.addEventListener('submit', submitMeeting);
     }
 });
+
+async function showDigitalStaff() {
+    // Esconde outras views e mostra a correta
+    document.querySelectorAll('.view').forEach(v => v.style.display = 'none');
+    document.getElementById('digital-staff-view').style.display = 'block';
+
+    // Atualiza menu ativo (assumindo que você ajustou a lógica do setActiveNav ou fará manual)
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    // (Opcional: lógica para ativar o item da sidebar correspondente)
+
+    const grid = document.getElementById('agents-grid');
+    grid.innerHTML = '<div class="loading">Conectando à Staff Digital...</div>';
+
+    try {
+        const response = await fetch('/api/agents', { credentials: 'include' });
+        const data = await response.json();
+
+        if (data.agents && data.agents.length > 0) {
+            grid.innerHTML = data.agents.map(agent => renderAgentCard(agent)).join('');
+        } else {
+            grid.innerHTML = `
+                <div class="no-data" style="grid-column: 1/-1;">
+                    <p>Sua staff digital está sendo montada automaticamente.</p>
+                </div>`;
+        }
+    } catch (error) {
+        console.error(error);
+        grid.innerHTML = '<div class="no-data">Erro ao carregar agentes.</div>';
+    }
+}
+
+function renderAgentCard(agent) {
+    // Lógica para determinar se está "Online" (ativo nos últimos 15 min)
+    const lastActive = new Date(agent.last_active);
+    const now = new Date();
+    const diffMinutes = (now - lastActive) / 1000 / 60;
+    const isOnline = diffMinutes < 60; // Considera "Online" se trabalhou na última hora
+
+    const statusClass = isOnline ? '' : 'agent-inactive';
+    const statusText = isOnline ? 'Online e Monitorando' : 'Aguardando Tarefas';
+
+    // Formatação amigável da data
+    const timeString = lastActive.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'});
+    const dateString = lastActive.toLocaleDateString('pt-BR');
+
+    return `
+    <div class="agent-card ${statusClass}" onclick="openAgentDrawer('${agent.name}', '${agent.role}', '${agent.style}')" style="cursor: pointer;">
+        <div class="agent-avatar-container style-${agent.style || 'blue'}">
+            🤖
+            <div class="status-indicator" title="${statusText}"></div>
+        </div>
+
+        <div class="agent-name">${agent.name}</div>
+        <div class="agent-role">${agent.role || 'Assistente de IA'}</div>
+
+        ${agent.insights_today > 0 
+            ? `<div class="activity-badge">⚡ ${agent.insights_today} insights hoje</div>` 
+            : `<div class="activity-badge">💤 Sem atividade hoje</div>`
+        }
+
+        <p style="font-size: 0.875rem; color: #64748B; margin-bottom: 1rem; line-height: 1.4;">
+            ${agent.description}
+        </p>
+
+        <div class="agent-last-seen">
+            Última atividade: ${dateString} às ${timeString}
+        </div>
+    </div>
+    `;
+}
+
+// --- AGENT DRAWER & INSIGHTS ---
+
+let currentAgentInsights = []; // Armazena localmente para filtrar sem requisição
+
+async function openAgentDrawer(name, role, style) {
+    // 1. Configura Visual do Header
+    document.getElementById('drawer-agent-name').textContent = name;
+    document.getElementById('drawer-agent-role').textContent = role || 'Assistente de IA';
+    const avatarDiv = document.getElementById('drawer-avatar');
+    avatarDiv.className = `drawer-avatar style-${style || 'blue'}`; // Reutiliza as cores do CSS
+
+    // 2. Abre o Drawer (Animação)
+    document.getElementById('agent-drawer').classList.add('open');
+    document.getElementById('drawer-overlay').classList.add('open');
+
+    // 3. Carrega Dados
+    const container = document.getElementById('drawer-content');
+    container.innerHTML = '<div class="loading">Carregando histórico de insights...</div>';
+
+    try {
+        // Encode do nome para URL (caso tenha espaços)
+        const response = await fetch(`/api/agents/${encodeURIComponent(name)}/insights`, { credentials: 'include' });
+        const data = await response.json();
+
+        currentAgentInsights = data.insights || [];
+        renderInsightsList(currentAgentInsights);
+
+        // Reseta filtros visuais
+        document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+        document.querySelector('.filter-chip:first-child').classList.add('active');
+
+    } catch (error) {
+        console.error(error);
+        container.innerHTML = '<div class="no-data">Erro ao carregar insights.</div>';
+    }
+}
+
+function closeAgentDrawer() {
+    document.getElementById('agent-drawer').classList.remove('open');
+    document.getElementById('drawer-overlay').classList.remove('open');
+}
+
+function renderInsightsList(insights) {
+    const container = document.getElementById('drawer-content');
+
+    if (insights.length === 0) {
+        container.innerHTML = `
+            <div class="no-data" style="text-align: left; padding: 0;">
+                <p>Nenhum insight ativo encontrado.</p>
+            </div>`;
+        return;
+    }
+
+    container.innerHTML = insights.map(item => `
+        <div class="timeline-insight severity-${item.severity}" id="insight-card-${item.id}">
+            <div class="timeline-dot"></div>
+            <div class="insight-detail-card">
+
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                    <div class="insight-meta">
+                        <span>${item.type}</span> • <span>${new Date(item.created_at).toLocaleDateString('pt-BR')}</span>
+                    </div>
+                    <button onclick="archiveInsight(${item.id}, event)" class="btn-icon-small" title="Descartar Insight">
+                        ✕
+                    </button>
+                </div>
+
+                <h4 style="margin-bottom: 0.5rem; color: #1E293B; font-size: 1rem;">${item.title}</h4>
+                <p style="color: #475569; font-size: 0.9rem; line-height: 1.6; margin-bottom: 1rem;">
+                    ${item.observation}
+                </p>
+
+                ${item.solution ? `
+                <div style="background: #F0FDF4; padding: 0.75rem; border-radius: 6px; border-left: 3px solid #10B981;">
+                    <strong style="color: #064E3B; font-size: 0.8rem; display: block; margin-bottom: 0.25rem;">💡 Sugestão</strong>
+                    <div style="color: #065F46; font-size: 0.85rem;">${item.solution}</div>
+                </div>` : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+function filterInsights(filterType) {
+    // Atualiza botões
+    document.querySelectorAll('.filter-chip').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.textContent.includes(filterType) || 
+           (filterType === 'ALL' && btn.textContent === 'Todos') ||
+           (filterType === 'ALTA' && btn.textContent.includes('Alta')) ||
+           (filterType === 'RISCO' && btn.textContent.includes('Riscos')) ||
+           (filterType === 'OPORTUNIDADE' && btn.textContent.includes('Oportunidades'))) {
+            btn.classList.add('active');
+        }
+    });
+
+    if (filterType === 'ALL') {
+        renderInsightsList(currentAgentInsights);
+    } else {
+        // Filtra por Severidade OU Tipo
+        const filtered = currentAgentInsights.filter(i => 
+            i.severity === filterType || i.type === filterType
+        );
+        renderInsightsList(filtered);
+    }
+}
+
+async function archiveInsight(id, event) {
+    // Impede que clique no card (se houver) propague
+    if(event) event.stopPropagation();
+
+    if(!confirm('Deseja descartar este insight? Ele não será mais exibido.')) return;
+
+    try {
+        const res = await fetch(`/api/insights/${id}/archive`, { 
+            method: 'PUT', 
+            credentials: 'include' 
+        });
+
+        if (res.ok) {
+            // Remove visualmente com uma animação simples
+            const card = document.getElementById(`insight-card-${id}`);
+            if(card) {
+                card.style.opacity = '0';
+                setTimeout(() => card.remove(), 300);
+            }
+
+            // Remove do array local para que os filtros funcionem corretamente
+            currentAgentInsights = currentAgentInsights.filter(i => i.id !== id);
+
+            showToast('Insight descartado.', 'success');
+        } else {
+            showToast('Erro ao descartar.', 'error');
+        }
+    } catch (e) {
+        console.error(e);
+        showToast('Erro de comunicação.', 'error');
+    }
+}

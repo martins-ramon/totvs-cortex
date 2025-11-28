@@ -13,7 +13,6 @@ def init_db():
     """Cria as tabelas no banco de dados se elas não existirem."""
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        
         conn.commit()
         
         conn.execute(text("""
@@ -35,11 +34,18 @@ def init_db():
         
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS feedbacks (
-                id SERIAL PRIMARY KEY, employee_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                manager_id INTEGER REFERENCES users(id) ON DELETE CASCADE, description TEXT NOT NULL,
-                feedback_date DATE NOT NULL, embedding vector(1536), created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                id SERIAL PRIMARY KEY, 
+                employee_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                manager_id INTEGER REFERENCES users(id) ON DELETE CASCADE, 
+                description TEXT NOT NULL,          -- Feedback técnico/gestão (Visão do Gestor)
+                transcription TEXT,                 -- ✅ NOVO: Transcrição bruta da conversa
+                feedback_for_employee TEXT,         -- ✅ NOVO: Texto polido para o colaborador
+                feedback_date DATE NOT NULL, 
+                embedding vector(1536), 
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )"""))
         conn.commit()
+        
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS insights (
                 id SERIAL PRIMARY KEY, employee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -94,6 +100,7 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                type VARCHAR(50) DEFAULT 'SYSTEM', -- 'SYSTEM', 'ACCESS'
                 title VARCHAR(255) NOT NULL,
                 message TEXT,
                 link VARCHAR(255),
@@ -102,38 +109,31 @@ def init_db():
             )"""))
         conn.commit()
 
+        # --- TABELA DE AGENTES (STAFF DIGITAL) ---
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS agents (
                 id SERIAL PRIMARY KEY,
-                name VARCHAR(100) NOT NULL,
-                personality_prompt TEXT NOT NULL,
-                type VARCHAR(50) UNIQUE NOT NULL,
-                is_active BOOLEAN DEFAULT TRUE,
+                name VARCHAR(100) UNIQUE NOT NULL, -- Identificador (ex: "Sarah", "Angelo")
+                role VARCHAR(100),                 -- Ex: "Estrategista Corporativo"
+                description TEXT,
+                avatar_style VARCHAR(50),          -- Para definir cor/ícone no front
+                last_active_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )"""))
         conn.commit()
 
+        # --- TABELA DE INSIGHTS DOS AGENTES (Separada de Notificações) ---
         conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS agent_conversations (
+            CREATE TABLE IF NOT EXISTS agent_insights (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-                message_text TEXT NOT NULL,
-                is_from_agent BOOLEAN DEFAULT FALSE,
-                is_proactive_insight BOOLEAN DEFAULT FALSE,
-                is_read BOOLEAN DEFAULT FALSE,
-                related_action_data JSONB,
+                agent_name VARCHAR(100),
+                title VARCHAR(255) NOT NULL,
+                observation TEXT,
+                solution_proposal TEXT,
+                severity VARCHAR(20),   -- ALTA, MEDIA, BAIXA
+                category VARCHAR(50),   -- RISCO, OPORTUNIDADE, PROBLEMA
+                is_archived BOOLEAN DEFAULT FALSE, -- Para o usuário "descartar"
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )"""))
-        conn.commit()
-
-        conn.execute(text("""
-            INSERT INTO agents (name, personality_prompt, type)
-            VALUES (
-                'Momentum',
-                'Você é Momentum, um mentor de carreira focado em alta performance. Você analisa feedbacks e reuniões passadas para encontrar padrões e oportunidades de crescimento. Você é proativo, encorajador e suas sugestões são sempre acionáveis. Responda em português brasileiro.',
-                'career_mentor'
-            )
-            ON CONFLICT (type) DO NOTHING
-        """))
         conn.commit()

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cortex - Inteligência que transforma. Times que performam.</title>
+    <title>Cortex - Transforme reuniões e feedbacks no combustível do seu crescimento. Menos rotina, mais impacto.</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/components.css">
@@ -30,6 +30,9 @@
                 </a>
                 <a href="#" onclick="showMeetings()" class="nav-item">
                     <span>📅</span> Minhas Reuniões
+                </a>
+                <a href="#" onclick="showDigitalStaff()" class="nav-item">
+                    <span>🧠</span> Meu Conselho Estratégico
                 </a>
             </nav>
             <div class="sidebar-footer">
@@ -100,7 +103,7 @@
                             <textarea id="meeting-transcription" class="form-control" rows="6" placeholder="Cole aqui a transcrição completa da reunião para gerar um resumo com IA..."></textarea>
                         </div>
                         <div class="form-group">
-                            <button type="button" onclick="generateSummary(event)" class="btn-secondary" style="width: auto; padding: 10px 15px;">Gerar Resumo com IA</button>
+                            <button type="button" onclick="generateSummary(event)" class="btn-secondary" style="width: auto; padding: 10px 15px;">✨ Extrair Inteligência</button>
                         </div>
                         <div class="form-group">
                             <label for="meeting-summary">Resumo da Reunião *</label>
@@ -126,6 +129,18 @@
                     <h3 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem;">Histórico de Reuniões</h3>
                     <div id="meetings-list">
                         </div>
+                </div>
+            </div>
+
+            <div id="digital-staff-view" class="view" style="display: none;">
+                <div class="view-header">
+                    <div class="vip-header-container">
+                        <h2 class="vip-title">Meu Conselho Digital</h2>
+                        <div class="vip-badge">Sua Equipe Pessoal</div>
+                    </div>
+                    <p>Agentes especialistas trabalhando 24/7 para impulsionar seus resultados, enquanto você foca no principal.</p>
+                </div>
+                <div id="agents-grid" class="dashboard-grid">
                 </div>
             </div>
 
@@ -192,6 +207,31 @@
         </div>
     </div>
 
+    <div id="agent-drawer" class="agent-drawer">
+        <div class="drawer-header">
+            <div class="drawer-agent-identity">
+                <div id="drawer-avatar" class="drawer-avatar">🤖</div>
+                <div>
+                    <h2 id="drawer-agent-name">Nome do Agente</h2>
+                    <p id="drawer-agent-role">Cargo do Agente</p>
+                </div>
+            </div>
+            <button class="drawer-close" onclick="closeAgentDrawer()">×</button>
+        </div>
+
+        <div class="drawer-filters">
+            <button class="filter-chip active" onclick="filterInsights('ALL')">Todos</button>
+            <button class="filter-chip" onclick="filterInsights('ALTA')">Alta Prioridade</button>
+            <button class="filter-chip" onclick="filterInsights('OPORTUNIDADE')">Oportunidades</button>
+            <button class="filter-chip" onclick="filterInsights('RISCO')">Riscos</button>
+        </div>
+
+        <div id="drawer-content" class="drawer-content">
+            </div>
+    </div>
+
+    <div id="drawer-overlay" class="drawer-overlay" onclick="closeAgentDrawer()"></div>
+    
     <div id="modal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModal()">&times;</span>
@@ -201,61 +241,8 @@
 
     <div class="toast-container" id="toast-container"></div>
 
-    <div id="agent-dock" class="agent-dock">
-        <button id="agent-dock-toggle" class="agent-dock-toggle" onclick="toggleAgentDock()">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-            </svg>
-            <span id="agent-dock-badge" class="agent-badge hidden">0</span>
-        </button>
-        
-        <div id="agent-dock-panel" class="agent-dock-panel hidden">
-            <div class="agent-dock-header">
-                <h3>Agentes IA</h3>
-                <button class="btn-icon" onclick="toggleAgentDock()">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            </div>
-            
-            <div id="agent-list" class="agent-list">
-                <div class="loading-skeleton">
-                    <div class="skeleton-agent-item"></div>
-                    <div class="skeleton-agent-item"></div>
-                </div>
-            </div>
-            
-            <div id="agent-conversation" class="agent-conversation hidden">
-                <div class="conversation-header">
-                    <button class="btn-icon" onclick="closeAgentConversation()">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="19" y1="12" x2="5" y2="12"></line>
-                            <polyline points="12 19 5 12 12 5"></polyline>
-                        </svg>
-                    </button>
-                    <div class="agent-header-info">
-                        <h4 id="conversation-agent-name">Carregando...</h4>
-                        <p id="conversation-agent-type">-</p>
-                    </div>
-                </div>
-                
-                <div id="conversation-messages" class="conversation-messages">
-                </div>
-                
-                <div class="conversation-input">
-                    <textarea id="agent-message-input" placeholder="Faça uma pergunta ao agente..." rows="2"></textarea>
-                    <button id="send-agent-message" onclick="sendAgentMessage()" class="btn-primary">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="22" y1="2" x2="11" y2="13"></line>
-                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                        </svg>
-                    </button>
-                </div>
-            </div>
+    <div id="chat-widget" class="chat-widget">
         </div>
-    </div>
 
     <script src="/static/js/app.js"></script>
 </body>
