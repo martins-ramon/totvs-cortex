@@ -1320,7 +1320,7 @@ def get_agent_insights(agent_name):
     try:
         # Busca na nova tabela, ignorando os arquivados
         query = text("""
-            SELECT id, title, observation, solution_proposal, severity, category, created_at
+            SELECT id, title, observation, solution_proposal, severity, category, created_at, action_payload
             FROM agent_insights
             WHERE user_id = :uid 
               AND agent_name = :agent 
@@ -1340,7 +1340,8 @@ def get_agent_insights(agent_name):
                 "solution": r[3],
                 "severity": r[4],
                 "type": r[5],
-                "created_at": r[6].isoformat()
+                "created_at": r[6].isoformat(),
+                "action_payload": r[7]
             })
 
         return jsonify({"insights": insights})
