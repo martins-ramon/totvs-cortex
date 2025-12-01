@@ -1181,11 +1181,13 @@ def ingest_ai_insights():
             # INSERE NA NOVA TABELA DE INSIGHTS
             insights_list = agent_output.get('insights', [])
             for item in insights_list:
+                payload_json = json.dumps(item.get('action_payload')) if item.get('action_payload') else None
+                
                 db.execute(
                     text("""
                         INSERT INTO agent_insights 
-                        (user_id, agent_name, title, observation, solution_proposal, severity, category)
-                        VALUES (:uid, :agent, :title, :obs, :sol, :sev, :cat)
+                        (user_id, agent_name, title, observation, solution_proposal, severity, category, action_payload)
+                        VALUES (:uid, :agent, :title, :obs, :sol, :sev, :cat, :payload)
                     """), {
                         "uid": user_id,
                         "agent": agent_name,
@@ -1193,7 +1195,8 @@ def ingest_ai_insights():
                         "obs": item.get('observation', ''),
                         "sol": item.get('solution_proposal', ''),
                         "sev": item.get('severity', 'MEDIA'),
-                        "cat": item.get('type', 'GERAL')
+                        "cat": item.get('type', 'GERAL'),
+                        "payload": payload_json # <--- NOVO CAMPO
                     })
 
             # Opcional: Criar uma notificação de sistema APENAS avisando "Novos insights disponíveis",
@@ -1214,6 +1217,50 @@ def ingest_ai_insights():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+@api_bp.route('/insights/<int:insight_id>/approve', methods=['POST'])
+def approve_insight_action(insight_id):
+    if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
+
+    db = SessionLocal()
+    try:
+        # 1. Busca o Insight e o Payload
+        insight = db.execute(
+            text("SELECT action_payload FROM agent_insights WHERE id = :id AND user_id = :uid"),
+            {"id": insight_id, "uid": session['user_id']}
+        ).fetchone()
+
+        if not insight or not insight[0]:
+            return jsonify({"error": "Insight não encontrado ou sem ação pendente"}), 404
+
+        payload = json.loads(insight[0])
+        action_type = payload.get('type')
+
+        # 2. Executa a Ação baseada no Tipo
+        if action_type == 'UPDATE_FEEDBACK':
+            target_feedback_id = payload.get('feedback_id')
+            draft_message = payload.get('draft_message')
+
+            if target_feedback_id and draft_message:
+                # Atualiza o feedback original com a mensagem aprovada
+                db.execute(
+                    text("UPDATE feedbacks SET feedback_for_employee = :msg WHERE id = :fid AND manager_id = :uid"),
+                    {"msg": draft_message, "fid": target_feedback_id, "uid": session['user_id']}
+                )
+
+        # 3. Arquiva o Insight (Ação Concluída)
+        db.execute(
+            text("UPDATE agent_insights SET is_archived = TRUE WHERE id = :id"),
+            {"id": insight_id}
+        )
+
+        db.commit()
+        return jsonify({"success": True})
+
+    except Exception as e:
+        db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        db.close()
 
 @api_bp.route('/agents', methods=['GET'])
 def get_agents():

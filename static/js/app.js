@@ -1705,25 +1705,42 @@ function renderInsightsList(insights) {
     const container = document.getElementById('drawer-content');
 
     if (insights.length === 0) {
-        container.innerHTML = `
-            <div class="no-data" style="text-align: left; padding: 0;">
-                <p>Nenhum insight ativo encontrado.</p>
-            </div>`;
+        container.innerHTML = `<div class="no-data"><p>Nenhum insight ativo encontrado.</p></div>`;
         return;
     }
 
-    container.innerHTML = insights.map(item => `
+    container.innerHTML = insights.map(item => {
+        // Verifica se há um payload de ação (Rascunho)
+        let actionBlock = '';
+        if (item.action_payload) { // O backend precisa enviar isso no GET também, verifique se get_agent_insights retorna action_payload
+            try {
+                const payload = typeof item.action_payload === 'string' ? JSON.parse(item.action_payload) : item.action_payload;
+
+                if (payload.type === 'UPDATE_FEEDBACK') {
+                    actionBlock = `
+                        <div style="margin-top: 1rem; background: #F8FAFC; border: 1px dashed #6366F1; border-radius: 8px; padding: 1rem;">
+                            <div style="font-size: 0.75rem; font-weight: 700; color: #6366F1; margin-bottom: 0.5rem; text-transform: uppercase;">
+                                ✍️ Rascunho Sugerido para o Colaborador
+                            </div>
+                            <div style="font-size: 0.9rem; color: #334155; font-style: italic; margin-bottom: 1rem; white-space: pre-wrap;">"${payload.draft_message}"</div>
+                            <button onclick="approveInsightAction(${item.id}, event)" class="btn-primary" style="padding: 0.5rem 1rem; font-size: 0.85rem; width: 100%;">
+                                ✅ Aprovar e Salvar no Feedback
+                            </button>
+                        </div>
+                    `;
+                }
+            } catch (e) { console.error('Erro ao parsear payload', e); }
+        }
+
+        return `
         <div class="timeline-insight severity-${item.severity}" id="insight-card-${item.id}">
             <div class="timeline-dot"></div>
             <div class="insight-detail-card">
-
                 <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
                     <div class="insight-meta">
                         <span>${item.type}</span> • <span>${new Date(item.created_at).toLocaleDateString('pt-BR')}</span>
                     </div>
-                    <button onclick="archiveInsight(${item.id}, event)" class="btn-icon-small" title="Descartar Insight">
-                        ✕
-                    </button>
+                    <button onclick="archiveInsight(${item.id}, event)" class="btn-icon-small" title="Descartar">✕</button>
                 </div>
 
                 <h4 style="margin-bottom: 0.5rem; color: #1E293B; font-size: 1rem;">${item.title}</h4>
@@ -1732,13 +1749,49 @@ function renderInsightsList(insights) {
                 </p>
 
                 ${item.solution ? `
-                <div style="background: #F0FDF4; padding: 0.75rem; border-radius: 6px; border-left: 3px solid #10B981;">
+                <div style="background: #F0FDF4; padding: 0.75rem; border-radius: 6px; border-left: 3px solid #10B981; margin-bottom: 0.5rem;">
                     <strong style="color: #064E3B; font-size: 0.8rem; display: block; margin-bottom: 0.25rem;">💡 Sugestão</strong>
                     <div style="color: #065F46; font-size: 0.85rem;">${item.solution}</div>
                 </div>` : ''}
+
+                ${actionBlock}
             </div>
         </div>
-    `).join('');
+    `}).join('');
+}
+
+async function approveInsightAction(id, event) {
+    if(event) event.stopPropagation();
+
+    const btn = event.target;
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = 'Processando...';
+
+    try {
+        const res = await fetch(`/api/insights/${id}/approve`, { 
+            method: 'POST', 
+            credentials: 'include' 
+        });
+
+        if (res.ok) {
+            showToast('Ação aprovada! Feedback atualizado.', 'success');
+            // Remove o card visualmente
+            const card = document.getElementById(`insight-card-${id}`);
+            if(card) {
+                card.style.opacity = '0';
+                setTimeout(() => card.remove(), 300);
+            }
+        } else {
+            showToast('Erro ao aprovar ação.', 'error');
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    } catch (e) {
+        showToast('Erro de comunicação.', 'error');
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
 }
 
 function filterInsights(filterType) {

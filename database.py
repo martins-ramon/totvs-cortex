@@ -122,7 +122,7 @@ def init_db():
             )"""))
         conn.commit()
 
-        # --- TABELA DE INSIGHTS DOS AGENTES (Separada de Notificações) ---
+        # --- TABELA DE INSIGHTS DOS AGENTES (STAFF DIGITAL) ---
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS agent_insights (
                 id SERIAL PRIMARY KEY,
@@ -132,8 +132,9 @@ def init_db():
                 observation TEXT,
                 solution_proposal TEXT,
                 severity VARCHAR(20),   -- ALTA, MEDIA, BAIXA
-                category VARCHAR(50),   -- RISCO, OPORTUNIDADE, PROBLEMA
-                is_archived BOOLEAN DEFAULT FALSE, -- Para o usuário "descartar"
+                category VARCHAR(50),   -- RISCO, OPORTUNIDADE, PROBLEMA, PENDENCIA
+                action_payload TEXT,    -- ✅ NOVO: Armazena JSON (string) com dados da ação (ex: rascunho de mensagem, ID do feedback)
+                is_archived BOOLEAN DEFAULT FALSE, -- Para o usuário "descartar" ou quando a ação for "concluída"
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )"""))
         conn.commit()
