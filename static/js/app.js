@@ -755,7 +755,19 @@ async function renderEmployeeFeedbackView() {
 
 async function generateFeedbackSummary(event) {
     const transcription = document.getElementById('feedback-transcription').value;
-    if (!transcription) { showToast('Insira uma transcrição primeiro.', 'warning'); return; }
+    // ✅ NOVO: Captura a data selecionada
+    const feedbackDate = document.getElementById('feedback-date').value; 
+
+    if (!transcription) { 
+        showToast('Insira uma transcrição primeiro.', 'warning'); 
+        return; 
+    }
+
+    // Validação opcional: garante que tem data para dar contexto à IA
+    if (!feedbackDate) {
+        showToast('Selecione a data do feedback para dar contexto à IA.', 'warning');
+        return;
+    }
 
     const btn = event.target;
     const originalText = btn.textContent;
@@ -763,13 +775,20 @@ async function generateFeedbackSummary(event) {
 
     try {
         const res = await fetch('/api/feedbacks/generate-summary', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ transcription })
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'},
+            // ✅ NOVO: Envia feedback_date no payload
+            body: JSON.stringify({ transcription, feedback_date: feedbackDate }) 
         });
         const data = await res.json();
         if (data.result) document.getElementById('feedback-description').value = data.result;
-    } catch(e) { showToast('Erro na IA', 'error'); } 
-    finally { btn.disabled = false; btn.textContent = originalText; }
+    } catch(e) { 
+        showToast('Erro na IA', 'error'); 
+        console.error(e);
+    } 
+    finally { 
+        btn.disabled = false; btn.textContent = originalText; 
+    }
 }
 
 async function generateEmployeeMsg(event) {
@@ -1295,6 +1314,18 @@ async function confirmDeleteMeeting(id) {
 
 // --- VIEW: MINHA CONTA ---
 
+async function linkGoogleAccount() {
+    try {
+        const response = await fetch('/api/auth/google/link');
+        const data = await response.json();
+        if (data.redirect_url) {
+            window.location.href = data.redirect_url;
+        }
+    } catch (error) {
+        showToast('Erro ao iniciar vínculo', 'error');
+    }
+}
+
 async function showAccount() {
     setActiveNav('account');
     document.getElementById('account-view').style.display = 'block';
@@ -1309,6 +1340,33 @@ async function showAccount() {
 
     await loadUserPhoto();
     await loadAvailableManagers();
+
+    // Renderiza status do Google
+    const googleContainer = document.getElementById('google-link-status');
+    if (currentUser.has_google_linked) {
+        googleContainer.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 10px; color: #10B981; font-weight: 500; background: #F0FDF4; padding: 10px; border-radius: 8px; border: 1px solid #BBF7D0;">
+                <svg style="width:20px;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                Conectado ao Google (${currentUser.email})
+            </div>
+        `;
+    } else {
+        googleContainer.innerHTML = `
+            <button type="button" onclick="linkGoogleAccount()" class="btn-google" style="margin: 0; font-size: 0.9rem;">
+                <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google" class="google-icon">
+                Vincular minha conta Google
+            </button>
+            <small style="color: #64748B; display: block; margin-top: 5px;">Use o Google para fazer login mais rápido.</small>
+        `;
+    }
+
+    // Verifica parâmetros de URL para toasters de sucesso/erro
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('success') === 'google_linked') {
+        showToast('Conta Google vinculada com sucesso!', 'success');
+        // Limpa a URL
+        window.history.replaceState({}, document.title, "/");
+    }
 }
 
 async function loadUserPhoto() {

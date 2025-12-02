@@ -9,6 +9,8 @@ from database import SessionLocal
 from services import summarize_transcription
 import services
 import requests
+import secrets
+from flask import redirect, url_for
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -90,9 +92,9 @@ def current_user():
     db = SessionLocal()
     try:
         result = db.execute(
-            text(
-                "SELECT id, name, email, company, phone, manager_id, mini_bio FROM users WHERE id = :id"
-            ), {"id": session['user_id']})
+            text("SELECT id, name, email, company, phone, manager_id, mini_bio, google_id FROM users WHERE id = :id"), 
+            {"id": session['user_id']}
+        )
         user = result.fetchone()
         if user:
             return jsonify({
@@ -104,7 +106,8 @@ def current_user():
                     "company": user[3],
                     "phone": user[4],
                     "manager_id": user[5],
-                    "mini_bio": user[6]
+                    "mini_bio": user[6],
+                    "has_google_linked": bool(user[7])
                 }
             })
         else:
@@ -911,18 +914,26 @@ def summarize_meeting():
 
 
 # --- ROTAS DE NOTIFICAÇÕES ---
+# Arquivo: routes.py
+
 @api_bp.route('/notifications', methods=['GET'])
 def get_notifications():
     if 'user_id' not in session: return jsonify({"error": "Unauthorized"}), 401
     db = SessionLocal()
     user_id = session['user_id']
     try:
-        # ✅ REMOVIDO: agent_name da query
+        # 1. Traz TUDO que não foi lido (is_read = FALSE)
+        # 2. OU Traz o que foi lido APENAS se for das últimas 24h
         notifs_res = db.execute(
             text("""
                 SELECT id, title, message, link, is_read, created_at, actor_id
                 FROM notifications 
                 WHERE user_id = :uid 
+                  AND (
+                      is_read = FALSE 
+                      OR 
+                      created_at >= (CURRENT_TIMESTAMP - INTERVAL '24 HOURS')
+                  )
                 ORDER BY created_at DESC
             """),
             {"uid": user_id}
@@ -935,7 +946,6 @@ def get_notifications():
                 "id": n[0], "title": n[1], "message": n[2], "link": n[3], 
                 "is_read": n[4], "created_at": n[5].isoformat(), 
                 "actor_id": n[6]
-                # agent_name removido daqui
             } for n in notifs_res
         ]
 
@@ -1372,9 +1382,13 @@ def archive_insight(insight_id):
 def generate_feedback_summary_route():
     data = request.json
     text_input = data.get('transcription', '')
+    # ✅ NOVO: Recebe a data
+    feedback_date = data.get('feedback_date', 'Data não informada')
+
     if not text_input: return jsonify({"error": "No text provided"}), 400
     try:
-        summary = services.generate_feedback_summary(text_input)
+        # ✅ NOVO: Passa a data para o serviço
+        summary = services.generate_feedback_summary(text_input, feedback_date)
         return jsonify({"result": summary})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1423,5 +1437,163 @@ def get_my_received_feedbacks():
             "manager": r[2]
         } for r in result.fetchall()]
         return jsonify({"feedbacks": feedbacks})
+    finally:
+        db.close()
+
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
+GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
+
+def get_google_provider_cfg():
+    return requests.get(GOOGLE_DISCOVERY_URL).json()
+
+@api_bp.route('/auth/google/login')
+def google_login():
+    """Inicia o fluxo de login/registro via Google."""
+    # Define modo 'login' na sessão para o callback saber o que fazer
+    session['oauth_mode'] = 'login'
+    return _start_google_flow()
+
+@api_bp.route('/auth/google/link')
+def google_link():
+    """Inicia o fluxo de vinculação de conta para usuário logado."""
+    if 'user_id' not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    # Define modo 'link' na sessão
+    session['oauth_mode'] = 'link'
+    return _start_google_flow()
+
+def _start_google_flow():
+    if not GOOGLE_CLIENT_ID:
+        return jsonify({"error": "Google Client ID not configured"}), 500
+
+    # Gera estado aleatório para segurança CSRF
+    state = secrets.token_urlsafe(16)
+    session['oauth_state'] = state
+
+    # Descobre endpoint de autorização
+    google_provider_cfg = get_google_provider_cfg()
+    authorization_endpoint = google_provider_cfg["authorization_endpoint"]
+
+    # Monta a URL de redirecionamento
+    redirect_uri = request.host_url.replace('http://', 'https://').rstrip('/') + "/api/auth/google/callback"
+
+    request_uri = requests.Request('GET', authorization_endpoint, params={
+        "client_id": GOOGLE_CLIENT_ID,
+        "access_type": "offline",
+        "scope": "openid email profile",
+        "response_type": "code",
+        "redirect_uri": redirect_uri, # Use a variável corrigida
+        "state": state
+    }).prepare().url
+
+    return jsonify({"redirect_url": request_uri})
+
+@api_bp.route('/auth/google/callback')
+def google_callback():
+    """Recebe o retorno do Google, troca o code por token e loga/registra o usuário."""
+    code = request.args.get("code")
+    state = request.args.get("state")
+
+    # Validação CSRF
+    if state != session.get('oauth_state'):
+        return jsonify({"error": "Invalid state parameter"}), 400
+
+    # 1. Troca o Code pelo Token
+    google_provider_cfg = get_google_provider_cfg()
+    token_endpoint = google_provider_cfg["token_endpoint"]
+
+    token_response = requests.post(
+        token_endpoint,
+        data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            # Mantendo a correção de HTTPS que fizemos anteriormente
+            "redirect_uri": request.host_url.replace('http://', 'https://').rstrip('/') + "/api/auth/google/callback",
+            "grant_type": "authorization_code",
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
+
+    tokens = token_response.json()
+
+    # 2. Obtém dados do Usuário
+    userinfo_endpoint = google_provider_cfg["userinfo_endpoint"]
+    userinfo_response = requests.get(userinfo_endpoint, headers={"Authorization": f"Bearer {tokens['access_token']}"})
+
+    if userinfo_response.status_code != 200:
+        return jsonify({"error": "Failed to get user info"}), 400
+
+    user_info = userinfo_response.json()
+    google_id = user_info["sub"]
+    email = user_info["email"]
+    name = user_info.get("name", email.split('@')[0])
+
+    mode = session.get('oauth_mode', 'login')
+    db = SessionLocal()
+
+    try:
+        if mode == 'link':
+            # --- CENÁRIO A: VINCULAR CONTA EXISTENTE ---
+            current_user_id = session.get('user_id')
+            if not current_user_id:
+                return redirect('/?error=session_expired')
+
+            # Verifica se este google_id já está em uso por OUTRA conta
+            conflict = db.execute(text("SELECT id FROM users WHERE google_id = :gid AND id != :uid"), 
+                                {"gid": google_id, "uid": current_user_id}).fetchone()
+            if conflict:
+                return redirect('/?error=google_account_already_linked')
+
+            db.execute(text("UPDATE users SET google_id = :gid WHERE id = :uid"), 
+                     {"gid": google_id, "uid": current_user_id})
+            db.commit()
+            return redirect('/?success=google_linked')
+
+        else:
+            # --- CENÁRIO B: LOGIN / REGISTRO ---
+
+            # B1. Tenta achar pelo Google ID
+            user = db.execute(text("SELECT id, name, company, email FROM users WHERE google_id = :gid"), {"gid": google_id}).fetchone()
+
+            # B2. Se não achar, tenta achar pelo Email (Vinculação Automática por Confiança)
+            if not user:
+                user_by_email = db.execute(text("SELECT id, name, company, email FROM users WHERE email = :email"), {"email": email}).fetchone()
+                if user_by_email:
+                    # Vincula a conta existente ao Google ID
+                    db.execute(text("UPDATE users SET google_id = :gid WHERE id = :uid"), {"gid": google_id, "uid": user_by_email[0]})
+                    db.commit()
+                    user = user_by_email
+
+            # B3. Se não achar nada, Cria Novo Usuário
+            if not user:
+                normalized_name = services.normalize_text(name)
+                # Senha aleatória forte (já que ele loga via Google)
+                random_pass = secrets.token_urlsafe(16)
+
+                result = db.execute(text("""
+                    INSERT INTO users (email, password_hash, name, name_normalized, company, google_id) 
+                    VALUES (:email, :pwd, :name, :norm, 'Minha Empresa', :gid) 
+                    RETURNING id, name, company, email
+                """), {
+                    "email": email,
+                    "pwd": hash_password(random_pass),
+                    "name": name,
+                    "norm": normalized_name,
+                    "gid": google_id
+                })
+                db.commit()
+                user = result.fetchone()
+
+            # Efetua Login na Sessão
+            session['user_id'] = user[0]
+
+            # Redireciona para o Frontend
+            return redirect('/')
+
+    except Exception as e:
+        db.rollback()
+        return jsonify({"error": str(e)}), 500
     finally:
         db.close()

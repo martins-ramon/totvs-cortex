@@ -16,6 +16,14 @@
 
             <div id="login-form" class="auth-form">
                 <h2>Login</h2>
+
+                <button onclick="loginWithGoogle()" class="btn-google">
+                    <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google" class="google-icon">
+                    Continuar com Google
+                </button>
+
+                <div class="auth-divider"><span>ou continue com email</span></div>
+
                 <input type="email" id="login-email" placeholder="Email" required>
                 <input type="password" id="login-password" placeholder="Senha" required>
                 <button onclick="login()" class="btn-primary">Entrar</button>

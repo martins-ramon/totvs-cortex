@@ -91,3 +91,17 @@ async function register() {
         showToast('Erro ao registrar', 'error');
     }
 }
+
+async function loginWithGoogle() {
+    try {
+        const response = await fetch('/api/auth/google/login');
+        const data = await response.json();
+        if (data.redirect_url) {
+            window.location.href = data.redirect_url;
+        } else {
+            showToast('Erro ao iniciar login com Google', 'error');
+        }
+    } catch (error) {
+        showToast('Erro de conexão', 'error');
+    }
+}

@@ -31,39 +31,43 @@ def get_embedding(text_to_embed: str):
     return response.data[0].embedding
 
 def generate_insights_from_feedback(employee_name: str, latest_feedback: dict, all_feedbacks: list):
-    """Gera insights de IA usando a persona 'Sarah'."""
+    """Gera insights de IA usando a persona 'Sarah' sob a ótica da Cultura TOTVS."""
 
-    # Prepara o histórico (excluindo o último para não duplicar no contexto, se desejar, ou mantendo para contexto total)
-    # Aqui mantemos os 5 últimos cronológicos
     feedback_history = "\n\n---\n\n".join([
         f"Feedback de {fb['feedback_date']}:\n{fb['description']}"
-        for fb in all_feedbacks[:15] # Pega os 15 mais recentes da lista já ordenada
+        for fb in all_feedbacks[:15]
     ])
 
-    prompt = f"""Você é **Sarah**, uma Consultora de Liderança e Alta Performance (QI 150).
-Analise os dados de feedback de {employee_name}.
+    prompt = f"""Você é **Sarah**, Consultora de Liderança e Especialista em Cultura Organizacional (TOTVS).
+    Analise os dados de feedback de {employee_name} sob a lente dos 5 valores da empresa.
 
-Último Feedback ({latest_feedback['feedback_date']}):
-{latest_feedback['description']}
+    **LENTE CULTURAL TOTVS:**
+    1. **Gente é tudo:** O colaborador demonstra 'atitude e engajamento' ou está passivo? É inclusivo? [cite: 62, 66]
+    2. **Cliente é pra vida:** Ele age como um 'Trusted Advisor' ou é apenas transacional? [cite: 72]
+    3. **Inovar juntos:** Ele colabora e simplifica processos ou trabalha em silos? [cite: 77]
+    4. **IH + IA:** Ele busca aprendizado contínuo e usa dados/IA? [cite: 83, 84]
+    5. **Resultado Responsável:** Ele entrega com integridade e sustentabilidade? [cite: 90]
 
-Histórico Recente:
-{feedback_history}
+    Último Feedback ({latest_feedback['feedback_date']}):
+    {latest_feedback['description']}
 
-Gere um objeto JSON em Português do Brasil com insights estratégicos sobre este colaborador.
-O "resumo" deve ser uma síntese executiva do ÚLTIMO feedback informado acima.
+    Histórico Recente:
+    {feedback_history}
 
-Formato JSON esperado:
-{{
-    "agent_name": "Sarah",
-    "resumo": "Síntese clara e direta do feedback de {latest_feedback['feedback_date']}.",
-    "pontos_desenvolvimento": ["ponto 1", "ponto 2", "ponto 3"],
-    "fortalezas": ["força 1", "força 2", "força 3"],
-    "risco_saida": {{"nivel": "baixo|medio|alto", "motivo": "explicação baseada em fatos"}},
-    "acoes_pendencias": ["ação sugerida 1", "ação sugerida 2"]
-}}"""
+    Gere um objeto JSON em Português do Brasil.
+
+    Formato JSON esperado:
+    {{
+        "agent_name": "Sarah",
+        "resumo": "Síntese executiva focada na aderência cultural e entrega.",
+        "pontos_desenvolvimento": ["Identifique gaps culturais (ex: Falta de 'Inovar Juntos') ou técnicos"],
+        "fortalezas": ["Destaque comportamentos que exemplificam os valores (ex: 'Role model de IH+IA')"],
+        "risco_saida": {{"nivel": "baixo|medio|alto", "motivo": "Analise sinais de perda de 'inquietação' ou engajamento"}},
+        "acoes_pendencias": ["Sugira ações que reforcem o papel de Trusted Advisor ou aprendizado"]
+    }}"""
 
     response = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
     )
@@ -77,7 +81,7 @@ def generate_bio_from_text(raw_text: str):
 
 A biografia deve ser fluida, profissional e adequada para um perfil como o LinkedIn. Destaque as principais competências e experiências. Não ultrapasse 3 ou 4 frases."""
     response = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content
@@ -113,7 +117,7 @@ Transcrição:
 {transcription}"""
 
     response = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3
     )
@@ -122,7 +126,7 @@ Transcrição:
 def create_chat_response(question: str, context: str):
     """Gera uma resposta de chat com base em um contexto."""
     chat_response = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": "Você é um assistente que ajuda gestores a encontrar informações em feedbacks e resumos de reuniões. Responda em português brasileiro de forma clara e objetiva, usando os dados fornecidos. Se não houver informação, seja honesto."},
             {"role": "user", "content": f"Baseado nestes dados:\n\n{context}\n\nPergunta: {question}"}
@@ -137,49 +141,67 @@ def normalize_text(text: str) -> str:
         return ""
     return unidecode(text).lower()
 
-def generate_feedback_summary(transcription: str):
-    """Gera um resumo estruturado de gestão usando a persona Sarah."""
+def generate_feedback_summary(transcription: str, feedback_date: str):
+    """Gera um resumo estruturado de gestão usando a persona Sarah, incluindo a data."""
+
+    # Formata a data se vier no padrão YYYY-MM-DD para ficar mais natural no texto
+    try:
+        if '-' in feedback_date:
+            from datetime import datetime
+            dt = datetime.strptime(feedback_date, '%Y-%m-%d')
+            feedback_date = dt.strftime('%d/%m/%Y')
+    except:
+        pass
+
     prompt = f"""Você é **Sarah**, uma Consultora de Liderança (QI 150).
-Abaixo está a transcrição bruta de uma conversa de feedback ou anotações soltas de um gestor.
+Abaixo está a transcrição bruta de uma conversa de feedback realizada em **{feedback_date}**.
 Sua tarefa é transformar isso em um **Registro de Feedback Gerencial** claro, imparcial e estruturado.
 
 Transcrição:
 {transcription}
 
 Saída (Texto corrido, profissional):
-Resuma os fatos principais, comportamentos observados e combinados feitos. Remova ruídos de fala."""
+Inicie citando a data da conversa. Resuma os fatos principais, comportamentos observados e combinados feitos. Remova ruídos de fala."""
 
     response = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content
 
 def generate_employee_message(manager_notes: str, transcription: str, employee_name: str):
     """
-    Gera mensagem de desenvolvimento (Sarah) personalizada com o nome do funcionário.
+    Gera mensagem de desenvolvimento (Sarah) personalizada com o nome do funcionário,
+    alinhada à Cultura TOTVS (Gente é tudo, Cliente é pra vida, Inovar Juntos, IH+IA, Resultado Responsável).
     """
     context = f"Notas do Gestor: {manager_notes}\n"
     if transcription:
         context += f"Contexto da Conversa: {transcription}"
 
-    prompt = f"""Você é **Sarah**, Chief People Officer (CPO) pessoal deste gestor.
-    Sua missão: Transformar anotações brutas em uma comunicação de liderança inspiradora e de alto impacto (Nível Executivo).
+    prompt = f"""Você é **Sarah**, Chief People Officer (CPO) pessoal deste gestor e Guardiã da Cultura TOTVS.
+    Sua missão: Transformar anotações brutas em uma comunicação de liderança inspiradora, conectando a performance do colaborador aos Valores da TOTVS.
 
     Colaborador: **{employee_name}**
     Dados Brutos:
     {context}
 
-    **Sua Estrutura de Resposta (Growth Mindset):**
-    1. **Abertura Empática:** Conecte-se com o colaborador.
-    2. **O "Unlock" (Fortalezas):** Não apenas elogie, mostre como o talento dele impacta o negócio (Gatilho de Propósito).
-    3. **O Desafio (Pontos de Melhoria):** Não aponte erros. Apresente o próximo nível de performance que ele pode atingir. Seja direta, mas encorajadora.
-    4. **Call to Action (Próximos Passos):** Sugira 1 ação prática para a próxima semana.
+    **GUIA DE CULTURA TOTVS (Use como base para o vocabulário):**
+    1. **Gente é tudo:** Valorizamos inquietação, atitude e engajamento. Fazemos acontecer (accountability) em um ambiente inclusivo[cite: 61, 62].
+    2. **Cliente é pra vida:** Somos "Trusted Advisors". Vamos além da tecnologia para ajudar o cliente[cite: 67, 72].
+    3. **Inovar juntos:** Inovação colaborativa. Simplificamos coisas complexas. Construímos oportunidades na incerteza[cite: 73, 77].
+    4. **IH + IA:** Somamos Inteligência Humana + Artificial. Aprendemos sempre e usamos dados para eficiência[cite: 80, 83].
+    5. **Resultado Responsável:** Excelência com integridade. Bom para todos, não a qualquer preço[cite: 86, 90].
 
-    Use formatação rica, parágrafos curtos e tom de "Coach de Elite"."""
+    **Sua Estrutura de Resposta (Tom: Coach de Elite & Parceiro de Evolução):**
+    1. **Abertura Empática:** Conecte-se com o colaborador ("Gente é tudo").
+    2. **O "Unlock" (Fortalezas):** Conecte o talento dele a um Valor TOTVS. (Ex: "Sua capacidade de usar dados mostra o valor IH+IA na prática").
+    3. **O Desafio (Pontos de Melhoria):** Apresente o próximo nível. (Ex: "Para ser um verdadeiro Trusted Advisor, precisamos evoluir em...").
+    4. **Call to Action:** Uma ação prática para a próxima semana focada em evolução.
+
+    Use formatação rica, parágrafos curtos e tom inspirador."""
 
     response = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o", # Mantido gpt-4o para maior qualidade na redação cultural
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content
