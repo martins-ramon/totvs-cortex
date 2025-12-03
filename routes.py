@@ -1233,16 +1233,23 @@ def approve_insight_action(insight_id):
 
     db = SessionLocal()
     try:
-        # 1. Busca o Insight e o Payload
-        insight = db.execute(
-            text("SELECT action_payload FROM agent_insights WHERE id = :id AND user_id = :uid"),
+        # 1. Busca o Insight, Payload e o E-mail do Usuário Atual
+        # Precisamos do e-mail do usuário para enviar a ata para ele (ou para os participantes, se evoluirmos)
+        data = db.execute(
+            text("""
+                SELECT i.action_payload, u.email 
+                FROM agent_insights i
+                JOIN users u ON i.user_id = u.id
+                WHERE i.id = :id AND i.user_id = :uid
+            """),
             {"id": insight_id, "uid": session['user_id']}
         ).fetchone()
 
-        if not insight or not insight[0]:
+        if not data or not data[0]:
             return jsonify({"error": "Insight não encontrado ou sem ação pendente"}), 404
 
-        payload = json.loads(insight[0])
+        payload = json.loads(data[0])
+        user_email = data[1]
         action_type = payload.get('type')
 
         # 2. Executa a Ação baseada no Tipo
@@ -1252,10 +1259,17 @@ def approve_insight_action(insight_id):
 
             if target_feedback_id and draft_message:
                 # Atualiza o feedback original com a mensagem aprovada
-                db.execute(
-                    text("UPDATE feedbacks SET feedback_for_employee = :msg WHERE id = :fid AND manager_id = :uid"),
-                    {"msg": draft_message, "fid": target_feedback_id, "uid": session['user_id']}
-                )
+                db.execute(text("UPDATE feedbacks SET feedback_for_employee = :msg WHERE id = :fid"),
+                    {"msg": draft_message, "fid": target_feedback_id})
+
+        elif action_type == 'SEND_EMAIL':
+            subject = payload.get('subject')
+            html_body = payload.get('html_body')
+
+            if subject and html_body:
+                # Por segurança/MVP, enviamos para o próprio usuário revisar e encaminhar
+                # Ou enviamos direto se a confiança for total. Aqui mandamos para o usuário.
+                services.send_email_action(user_email, subject, html_body)
 
         # 3. Arquiva o Insight (Ação Concluída)
         db.execute(

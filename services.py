@@ -2,6 +2,7 @@ import os
 import json
 from openai import OpenAI
 from unidecode import unidecode
+import requests
 
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
@@ -205,3 +206,35 @@ def generate_employee_message(manager_notes: str, transcription: str, employee_n
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content
+
+MAILERSEND_API_KEY = os.environ.get('MAILERSEND_API_KEY')
+if not MAILERSEND_API_KEY:
+    raise ValueError("MAILERSEND_API_KEY environment variable is not set")
+
+MAILERSEND_FROM = os.environ.get('MAILERSEND_FROM')
+if not MAILERSEND_FROM:
+    raise ValueError("MAILERSEND_FROM environment variable is not set")
+
+def send_email_action(to_email: str, subject: str, html_content: str):
+    """Dispara e-mail via MailerSend (Ação do Angelo)."""
+
+    url = "https://api.mailersend.com/v1/email"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {MAILERSEND_API_KEY}"
+    }
+
+    payload = {
+        "from": {"email": MAILERSEND_FROM, "name": "Cortex AI"},
+        "to": [{"email": to_email}], # Envia para o próprio usuário (ou lista, se expandirmos)
+        "subject": subject,
+        "html": html_content
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"Erro ao enviar email: {e}")
+        raise e

@@ -1774,7 +1774,8 @@ function renderInsightsList(insights) {
             try {
                 const payload = typeof item.action_payload === 'string' ? JSON.parse(item.action_payload) : item.action_payload;
 
-                if (payload.type === 'UPDATE_FEEDBACK') {
+                if (payload.type === 'UPDATE_FEEDBACK')
+                {
                     actionBlock = `
                         <div style="margin-top: 1rem; background: #F8FAFC; border: 1px dashed #6366F1; border-radius: 8px; padding: 1rem;">
                             <div style="font-size: 0.75rem; font-weight: 700; color: #6366F1; margin-bottom: 0.5rem; text-transform: uppercase;">
@@ -1783,6 +1784,22 @@ function renderInsightsList(insights) {
                             <div style="font-size: 0.9rem; color: #334155; font-style: italic; margin-bottom: 1rem; white-space: pre-wrap;">"${payload.draft_message}"</div>
                             <button onclick="approveInsightAction(${item.id}, event)" class="btn-primary" style="padding: 0.5rem 1rem; font-size: 0.85rem; width: 100%;">
                                 ✅ Aprovar e Salvar no Feedback
+                            </button>
+                        </div>
+                    `;
+                }
+                else if (payload.type === 'SEND_EMAIL')
+                {
+                    actionBlock = `
+                        <div style="margin-top: 1rem; background: #F0F9FF; border: 1px dashed #0284C7; border-radius: 8px; padding: 1rem;">
+                            <div style="font-size: 0.75rem; font-weight: 700; color: #0284C7; margin-bottom: 0.5rem; text-transform: uppercase;">
+                                📧 Ata Executiva Pronta
+                            </div>
+                            <div style="font-size: 0.9rem; color: #334155; margin-bottom: 1rem; border-left: 3px solid #E0F2FE; padding-left: 10px;">
+                                <strong>Assunto:</strong> ${payload.subject}
+                            </div>
+                            <button onclick="approveInsightAction(${item.id}, event)" class="btn-primary" style="padding: 0.5rem 1rem; font-size: 0.85rem; width: 100%; background-color: #0284C7;">
+                                🚀 Disparar Ata por E-mail
                             </button>
                         </div>
                     `;
