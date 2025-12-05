@@ -386,6 +386,17 @@ def create_feedback():
                 "fd": feedback_date,
                 "e": str(embedding)
             })
+
+        # ✅ NOVO: Notifica o funcionário se houver mensagem para ele
+        if feedback_for_employee and feedback_for_employee.strip():
+            db.execute(text("""
+                INSERT INTO notifications (user_id, actor_id, title, message, link, type)
+                VALUES (:uid, :aid, 'Novo Feedback', 'Seu gestor registrou uma mensagem de desenvolvimento para você.', '/feedbacks', 'SYSTEM')
+            """), {
+                "uid": data['user_id'], # ID do funcionário
+                "aid": session['user_id'] # ID do gestor (quem praticou a ação)
+            })
+            
         db.commit()
         return jsonify({"success": True, "feedback_id": result.fetchone()[0]})
     finally:
@@ -571,7 +582,7 @@ def update_feedback(feedback_id):
         # Verifica se o feedback pertence ao gestor logado antes de editar
         check = db.execute(
             text(
-                "SELECT id FROM feedbacks WHERE id = :fid AND manager_id = :mid"
+                "SELECT id, employee_id FROM feedbacks WHERE id = :fid AND manager_id = :mid"
             ), {
                 "fid": feedback_id,
                 "mid": session['user_id']
@@ -580,6 +591,8 @@ def update_feedback(feedback_id):
         if not check:
             return jsonify(
                 {"error": "Feedback não encontrado ou acesso negado"}), 404
+
+        employee_id = check[1] # Captura o ID do funcionário
 
         # Recalcula o embedding pois o conteúdo mudou
         temporal_context = f"Feedback de {feedback_date}: {description}"
@@ -603,6 +616,19 @@ def update_feedback(feedback_id):
                 "emb": str(embedding),
                 "fid": feedback_id
             })
+
+        # ✅ NOVO: Notifica o funcionário sobre a atualização
+        if feedback_for_employee and feedback_for_employee.strip():
+            # Evita duplicidade simples verificando se já existe notificação recente não lida? 
+            # Por simplicidade e urgência, notificamos sempre que o gestor edita e salva.
+            db.execute(text("""
+                INSERT INTO notifications (user_id, actor_id, title, message, link, type)
+                VALUES (:uid, :aid, 'Feedback Atualizado', 'Seu gestor atualizou seu feedback de desenvolvimento.', '/feedbacks', 'SYSTEM')
+            """), {
+                "uid": employee_id,
+                "aid": session['user_id']
+            })
+            
         db.commit()
         return jsonify({"success": True})
     except Exception as e:
@@ -1261,6 +1287,21 @@ def approve_insight_action(insight_id):
                 # Atualiza o feedback original com a mensagem aprovada
                 db.execute(text("UPDATE feedbacks SET feedback_for_employee = :msg WHERE id = :fid"),
                     {"msg": draft_message, "fid": target_feedback_id})
+
+                # ✅ NOVO: Busca o dono do feedback para notificar
+                emp_res = db.execute(
+                    text("SELECT employee_id FROM feedbacks WHERE id = :fid"), 
+                    {"fid": target_feedback_id}
+                ).fetchone()
+
+                if emp_res:
+                    db.execute(text("""
+                        INSERT INTO notifications (user_id, actor_id, title, message, link, type)
+                        VALUES (:uid, :aid, 'Novo Feedback', 'Seu gestor compartilhou uma mensagem de desenvolvimento com você.', '/feedbacks', 'SYSTEM')
+                    """), {
+                        "uid": emp_res[0],
+                        "aid": session['user_id']
+                    })
 
         elif action_type == 'SEND_EMAIL':
             subject = payload.get('subject')
