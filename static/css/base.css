@@ -183,3 +183,41 @@ body {
       width: 100%;
   }
 }
+
+/* --- Editor Rico (Substituto de Textarea) --- */
+.rich-editor {
+    min-height: 150px;
+    max-height: 400px;
+    overflow-y: auto;
+    white-space: pre-wrap; /* Preserva quebras de linha */
+    background-color: white;
+    line-height: 1.6;
+}
+
+/* Estilos para o HTML gerado pelo Markdown */
+.rich-editor ul, .rich-editor ol {
+    margin-left: 20px;
+    margin-bottom: 10px;
+}
+
+.rich-editor li {
+    margin-bottom: 4px;
+}
+
+.rich-editor strong {
+    font-weight: 700;
+    color: #1E293B;
+}
+
+.rich-editor h1, .rich-editor h2, .rich-editor h3 {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-top: 10px;
+    margin-bottom: 5px;
+}
+
+.rich-editor:empty:before {
+    content: attr(placeholder);
+    color: #94a3b8;
+    display: block; /* Para o placeholder aparecer corretamente */
+}

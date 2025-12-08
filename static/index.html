@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cortex - Transforme reuniões e feedbacks no combustível do seu crescimento. Menos rotina, mais impacto.</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/components.css">
 </head>
@@ -107,7 +108,7 @@
                         </div>
                         <div class="form-group">
                             <label for="meeting-summary">Resumo da Reunião *</label>
-                            <textarea id="meeting-summary" class="form-control" rows="4" placeholder="Um resumo claro dos pontos discutidos, decisões e próximos passos." required></textarea>
+                            <div id="meeting-summary" class="form-control rich-editor" contenteditable="true" placeholder="Um resumo claro dos pontos discutidos..."></div>
                         </div>
 
                         <div class="form-group">

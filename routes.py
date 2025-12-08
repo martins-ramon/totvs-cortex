@@ -758,36 +758,68 @@ def handle_single_meeting(meeting_id):
                 })
             return jsonify({"error":
                             "Meeting not found or access denied"}), 404
+            
         elif request.method == 'PUT':
             data = request.json
+            new_summary = data.get('summary', '')
+            new_transcription = data.get('transcription', '')
+            new_date = data.get('meeting_date')
+    
+            # 1. Busca o estado ATUAL antes de atualizar
+            current_meeting = db.execute(
+                text("SELECT summary, transcription FROM meetings WHERE id = :mid AND user_id = :uid"),
+                {"mid": meeting_id, "uid": user_id}
+            ).fetchone()
+    
+            if not current_meeting:
+                return jsonify({"error": "Meeting not found"}), 404
+    
+            # Normaliza para comparação (trata None como '')
+            old_summary = current_meeting[0] or ''
+            old_transcription = current_meeting[1] or ''
+    
+            # 2. Verifica se houve alteração de CONTEÚDO (Texto)
+            content_changed = (old_summary != new_summary) or (old_transcription != new_transcription)
+    
+            # 3. Atualiza o registro principal (sempre, pois a DATA pode ter mudado)
             db.execute(
-                text(
-                    "UPDATE meetings SET meeting_date = :date, transcription = :trans, summary = :sum WHERE id = :mid AND user_id = :uid"
-                ), {
-                    "date": data['meeting_date'],
-                    "trans": data.get('transcription', ''),
-                    "sum": data['summary'],
+                text("UPDATE meetings SET meeting_date = :date, transcription = :trans, summary = :sum WHERE id = :mid AND user_id = :uid"), 
+                {
+                    "date": new_date,
+                    "trans": new_transcription,
+                    "sum": new_summary,
                     "mid": meeting_id,
-                    "uid": session['user_id']
-                })
-            db.execute(
-                text("DELETE FROM meeting_chunks WHERE meeting_id = :mid"),
-                {"mid": meeting_id})
-
-            full_text = f"Reunião de {data['meeting_date']}. Resumo: {data['summary']}. Transcrição: {data.get('transcription', '')}"
-            text_chunks = services.chunk_text(full_text)
-            for chunk in text_chunks:
-                embedding = services.get_embedding(chunk)
-                db.execute(
-                    text(
-                        "INSERT INTO meeting_chunks (meeting_id, chunk_text, embedding) VALUES (:mid, :text, :emb)"
-                    ), {
-                        "mid": meeting_id,
-                        "text": chunk,
-                        "emb": str(embedding)
-                    })
+                    "uid": user_id
+                }
+            )
+    
+            # 4. Lógica Condicional de Embedding (Economia de Tokens/Processamento)
+            if content_changed:
+                print(f"Conteúdo da reunião {meeting_id} alterado. Recalculando embeddings...")
+    
+                # Remove chunks antigos
+                db.execute(text("DELETE FROM meeting_chunks WHERE meeting_id = :mid"), {"mid": meeting_id})
+    
+                # Gera novos chunks e embeddings
+                full_text = f"Reunião de {new_date}. Resumo: {new_summary}. Transcrição: {new_transcription}"
+                text_chunks = services.chunk_text(full_text)
+    
+                for chunk in text_chunks:
+                    embedding = services.get_embedding(chunk)
+                    db.execute(
+                        text("INSERT INTO meeting_chunks (meeting_id, chunk_text, embedding) VALUES (:mid, :text, :emb)"),
+                        {
+                            "mid": meeting_id, 
+                            "text": chunk, 
+                            "emb": str(embedding)
+                        }
+                    )
+            else:
+                print(f"Conteúdo da reunião {meeting_id} inalterado. Pulando geração de embeddings.")
+    
             db.commit()
             return jsonify({"success": True})
+            
         elif request.method == 'DELETE':
             db.execute(
                 text(

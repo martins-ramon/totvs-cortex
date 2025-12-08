@@ -678,12 +678,12 @@ function renderManagerFeedbackView(managedUsers) {
 
             <div class="form-group">
                 <label>Registro Gerencial (Visão do Gestor) *</label>
-                <textarea id="feedback-description" class="form-control" rows="6" placeholder="O registro oficial técnico e comportamental..." required></textarea>
+                <div id="feedback-description" class="form-control rich-editor" contenteditable="true" placeholder="O registro oficial técnico e comportamental..."></div>
             </div>
 
             <div class="form-group" style="background: #F0FDF4; padding: 1rem; border-radius: 8px; border: 1px solid #BBF7D0;">
                 <label style="color: #15803D;">Feedback para o Participante (Visível para ele)</label>
-                <textarea id="feedback-employee-msg" class="form-control" rows="6" placeholder="Mensagem de desenvolvimento para o colaborador ler..."></textarea>
+                <div id="feedback-employee-msg" class="form-control rich-editor" contenteditable="true" style="background: white;" placeholder="Mensagem de desenvolvimento..."></div>
                 <button type="button" onclick="generateEmployeeMsg(event)" class="btn-ai-action" style="margin-top: 0.75rem;">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
                         <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd" />
@@ -781,7 +781,10 @@ async function generateFeedbackSummary(event) {
             body: JSON.stringify({ transcription, feedback_date: feedbackDate }) 
         });
         const data = await res.json();
-        if (data.result) document.getElementById('feedback-description').value = data.result;
+        if (data.result) {
+            // ✅ NOVO: Converte e insere
+            document.getElementById('feedback-description').innerHTML = marked.parse(data.result);
+        }
     } catch(e) { 
         showToast('Erro na IA', 'error'); 
         console.error(e);
@@ -792,7 +795,7 @@ async function generateFeedbackSummary(event) {
 }
 
 async function generateEmployeeMsg(event) {
-    const description = document.getElementById('feedback-description').value;
+    const description = document.getElementById('feedback-description').innerText;
     const transcription = document.getElementById('feedback-transcription').value;
 
     // ✅ CAPTURA DO NOME:
@@ -827,7 +830,8 @@ async function generateEmployeeMsg(event) {
         });
         const data = await res.json();
         if (data.result) {
-            document.getElementById('feedback-employee-msg').value = data.result;
+            // ✅ NOVO: Converte e insere
+            document.getElementById('feedback-employee-msg').innerHTML = marked.parse(data.result);
             showToast('Mensagem gerada com sucesso!', 'success');
         }
     } catch(e) { 
@@ -843,9 +847,9 @@ async function submitFeedbackUpdated(event) {
     event.preventDefault();
     const user_id = document.getElementById('feedback-user-container-value').value;
     const feedback_date = document.getElementById('feedback-date').value;
-    const description = document.getElementById('feedback-description').value;
+    const description = document.getElementById('feedback-description').innerText;
     const transcription = document.getElementById('feedback-transcription').value;
-    const feedback_for_employee = document.getElementById('feedback-employee-msg').value;
+    const feedback_for_employee = document.getElementById('feedback-employee-msg').innerText;
 
     if (!user_id || !feedback_date || !description) {
         showToast('Campos obrigatórios: Usuário, Data e Registro Gerencial', 'warning');
@@ -1165,7 +1169,8 @@ async function generateSummary(event) {
         const data = await response.json();
 
         if (response.ok) {
-            document.getElementById('meeting-summary').value = data.summary;
+            const htmlContent = marked.parse(data.summary);
+            document.getElementById('meeting-summary').innerHTML = htmlContent;
             showToast('Resumo gerado com sucesso!', 'success');
         } else {
             showToast(data.error || 'Erro ao gerar resumo', 'error');
@@ -1183,7 +1188,7 @@ async function submitMeeting(event) {
     event.preventDefault();
     const meeting_id_val = document.getElementById('meeting-id').value;
     const meeting_date = document.getElementById('meeting-date').value;
-    const summary = document.getElementById('meeting-summary').value;
+    const summary = document.getElementById('meeting-summary').innerText;
     const transcription = document.getElementById('meeting-transcription').value;
 
     if (!meeting_date || !summary.trim()) {
