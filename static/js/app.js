@@ -786,7 +786,7 @@ async function generateFeedbackSummary(event) {
             document.getElementById('feedback-description').innerHTML = marked.parse(data.result);
         }
     } catch(e) { 
-        showToast('Erro na IA', 'error'); 
+        showToast('Erro na IA', 'error');  
         console.error(e);
     } 
     finally { 

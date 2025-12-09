@@ -1471,7 +1471,6 @@ def generate_feedback_summary_route():
     text_input = data.get('transcription', '')
     # ✅ NOVO: Recebe a data
     feedback_date = data.get('feedback_date', 'Data não informada')
-
     if not text_input: return jsonify({"error": "No text provided"}), 400
     try:
         # ✅ NOVO: Passa a data para o serviço

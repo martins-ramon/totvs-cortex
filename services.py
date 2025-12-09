@@ -144,6 +144,7 @@ def normalize_text(text: str) -> str:
 
 def generate_feedback_summary(transcription: str, feedback_date: str):
     """Gera um resumo estruturado de gestão usando a persona Sarah, incluindo a data."""
+    print("executando generate_feedback_summary")
 
     # Formata a data se vier no padrão YYYY-MM-DD para ficar mais natural no texto
     try:
@@ -151,6 +152,7 @@ def generate_feedback_summary(transcription: str, feedback_date: str):
             from datetime import datetime
             dt = datetime.strptime(feedback_date, '%Y-%m-%d')
             feedback_date = dt.strftime('%d/%m/%Y')
+            print("converteu")
     except:
         pass
 
