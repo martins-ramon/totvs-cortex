@@ -894,25 +894,63 @@ def share_meeting(meeting_id):
             # 4. Prepara dados para notificações
             owner_name = owner_check[0]
             meeting_summary = owner_check[1]
-            # Link abre a modal da reunião
             link = f"/meetings/{meeting_id}"
 
-            # A. Notifica NOVOS usuários (Adicionados)
+            # --- NOVA IMPLEMENTAÇÃO: Notificação Híbrida (Sistema + E-mail) ---
             if added_ids:
                 title_share = "Nova reunião compartilhada"
                 msg_share = f"{owner_name} compartilhou a reunião '{meeting_summary[:50]}...' com você."
-                for p_id in added_ids:
-                    db.execute(
-                        text("""
-                            INSERT INTO notifications (user_id, actor_id, title, message, link)
-                            VALUES (:uid, :actor_id, :title, :message, :link)
-                        """), {
-                            "uid": p_id,
-                            "actor_id": user_id,
-                            "title": title_share,
-                            "message": msg_share,
-                            "link": link
-                        })
+
+                # 1. Busca detalhes (E-mail e Nome) dos usuários adicionados
+                # Convertemos o set para tupla para usar na query SQL
+                if len(added_ids) > 0:
+                    added_ids_tuple = tuple(added_ids)
+                    users_to_notify = db.execute(
+                        text("SELECT id, name, email FROM users WHERE id IN :ids"),
+                        {"ids": added_ids_tuple}
+                    ).fetchall()
+
+                    for user_row in users_to_notify:
+                        target_uid = user_row[0]
+                        target_name = user_row[1]
+                        target_email = user_row[2]
+
+                        # A. Notificação In-App (Mantida)
+                        db.execute(
+                            text("""
+                                INSERT INTO notifications (user_id, actor_id, title, message, link)
+                                VALUES (:uid, :actor_id, :title, :message, :link)
+                            """), {
+                                "uid": target_uid,
+                                "actor_id": user_id,
+                                "title": title_share,
+                                "message": msg_share,
+                                "link": link
+                            })
+
+                        # B. Notificação por E-mail (Nova)
+                        if target_email:
+                            try:
+                                email_subject = f"Cortex: {owner_name} compartilhou uma reunião com você"
+                                # HTML simples e direto, mantendo o estilo "Enterprise"
+                                email_body = f"""
+                                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1E293B; max-width: 600px;">
+                                    <h2 style="color: #6366F1;">Cortex</h2>
+                                    <p>Olá, <strong>{target_name}</strong>.</p>
+                                    <p>{owner_name} concedeu a você acesso à seguinte reunião:</p>
+                                    <div style="background-color: #F8FAFC; border-left: 4px solid #6366F1; padding: 15px; margin: 20px 0; color: #475569;">
+                                        "{meeting_summary}"
+                                    </div>
+                                    <p>Você pode acessar a transcrição e o resumo executivo clicando abaixo:</p>
+                                    <p style="margin-top: 25px;">
+                                        <a href="{request.host_url.rstrip('/')}" style="background-color: #6366F1; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: 500;">Acessar Cortex</a>
+                                    </p>
+                                </div>
+                                """
+                                services.send_email_action(target_email, email_subject, email_body)
+                            except Exception as e:
+                                # Logamos o erro mas não travamos o fluxo (fail-safe)
+                                print(f"Erro ao enviar e-mail de compartilhamento para {target_email}: {e}")
 
             # B. Notifica USUÁRIOS REMOVIDOS (Feature Solicitada)
             if removed_ids:

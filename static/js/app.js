@@ -1237,8 +1237,12 @@ async function submitMeeting(event) {
 function resetMeetingForm() {
     document.getElementById('meeting-form').reset();
     document.getElementById('meeting-id').value = '';
+
+    document.getElementById('meeting-summary').innerText = ''; 
+
     document.getElementById('meeting-date').value = new Date().toISOString().split('T')[0];
-    loadUsersForSharing();
+
+    loadUsersForSharing(); 
 }
 
 async function viewMeeting(id) {
@@ -1259,9 +1263,16 @@ async function editMeeting(id) {
         const response = await fetch(`/api/meetings/${id}`, { credentials: 'include' });
         if (!response.ok) throw new Error('Meeting not found');
         const data = await response.json();
+
         document.getElementById('meeting-id').value = data.id;
         document.getElementById('meeting-date').value = data.meeting_date.split('T')[0];
-        document.getElementById('meeting-summary').value = data.summary;
+
+        // --- CORREÇÃO ABAIXO ---
+        // Antes: document.getElementById('meeting-summary').value = data.summary;
+        // Agora: Usamos innerText pois é uma div contenteditable
+        document.getElementById('meeting-summary').innerText = data.summary; 
+        // -----------------------
+
         document.getElementById('meeting-transcription').value = data.transcription || '';
 
         const shareResponse = await fetch(`/api/meetings/${id}/share`, { credentials: 'include' });
@@ -1271,6 +1282,7 @@ async function editMeeting(id) {
         window.scrollTo(0, 0);
         showToast('Dados da reunião carregados para edição.', 'info');
     } catch (error) {
+        console.error(error); // Log para debug
         showToast('Erro ao carregar reunião para edição.', 'error');
     }
 }
