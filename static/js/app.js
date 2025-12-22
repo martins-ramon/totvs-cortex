@@ -999,22 +999,26 @@ async function editFeedback(feedbackId) {
 
         closeModal(); // Fecha o histórico
 
-        // Preenche os campos do formulário principal
-        document.getElementById('feedback-description').value = feedback.description || '';
+        // --- CORREÇÃO: Usar innerText para divs contenteditable ---
+        document.getElementById('feedback-description').innerText = feedback.description || ''; 
+        // ---------------------------------------------------------
+
         document.getElementById('feedback-date').value = feedback.feedback_date.split('T')[0];
 
-        // ✅ Preenche os novos campos (verifica se o elemento existe na tela antes)
+        // Transcrição é textarea, então .value funciona
         const transInput = document.getElementById('feedback-transcription');
         if (transInput) transInput.value = feedback.transcription || '';
 
+        // --- CORREÇÃO: Usar innerText para divs contenteditable ---
         const empMsgInput = document.getElementById('feedback-employee-msg');
-        if (empMsgInput) empMsgInput.value = feedback.feedback_for_employee || '';
+        if (empMsgInput) empMsgInput.innerText = feedback.feedback_for_employee || '';
+        // ---------------------------------------------------------
 
         // Muda o comportamento do botão Salvar
         const submitButton = document.querySelector('#feedback-form button[type="submit"]');
         submitButton.textContent = 'Atualizar Feedback';
 
-        // Remove listener antigo (clonando) e adiciona o novo para evitar duplicidade de submit
+        // Remove listener antigo (clonando) e adiciona o novo
         const newBtn = submitButton.cloneNode(true);
         submitButton.parentNode.replaceChild(newBtn, submitButton);
 
