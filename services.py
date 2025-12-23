@@ -217,6 +217,7 @@ MAILERSEND_FROM = os.environ.get('MAILERSEND_FROM')
 if not MAILERSEND_FROM:
     raise ValueError("MAILERSEND_FROM environment variable is not set")
 
+
 def send_email_action(to_email: str, subject: str, html_content: str):
     """Dispara e-mail via MailerSend (Ação do Angelo)."""
 
@@ -226,17 +227,29 @@ def send_email_action(to_email: str, subject: str, html_content: str):
         "Authorization": f"Bearer {MAILERSEND_API_KEY}"
     }
 
+    # Ajuste de segurança: Verifica se o 'to_email' é válido antes de tentar
+    if not to_email or "@" not in to_email:
+        print(f"E-mail ignorado (formato inválido): {to_email}")
+        return False
+
     payload = {
         "from": {"email": MAILERSEND_FROM, "name": "Cortex AI"},
-        "to": [{"email": to_email}], # Envia para o próprio usuário (ou lista, se expandirmos)
+        "to": [{"email": to_email}], 
         "subject": subject,
         "html": html_content
     }
 
     try:
         response = requests.post(url, headers=headers, json=payload)
+
+        # --- MELHORIA DE DEBUG ---
+        if not response.ok:
+            print(f"⚠️ ERRO MAILERSEND (Status {response.status_code}):")
+            print(response.text) # Isso vai imprimir o JSON exato do erro no console
+
         response.raise_for_status()
         return True
     except Exception as e:
-        print(f"Erro ao enviar email: {e}")
-        raise e
+        print(f"Falha crítica no envio de e-mail: {e}")
+        # Não damos 'raise' aqui para não travar o fluxo principal do app (feedback/reunião)
+        return False

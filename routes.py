@@ -387,16 +387,55 @@ def create_feedback():
                 "e": str(embedding)
             })
 
-        # ✅ NOVO: Notifica o funcionário se houver mensagem para ele
+        # ✅ NOVO: Notifica o funcionário se houver mensagem para ele (Híbrido: App + Email)
         if feedback_for_employee and feedback_for_employee.strip():
+            # 1. Notificação In-App (Já existia, mantida)
             db.execute(text("""
                 INSERT INTO notifications (user_id, actor_id, title, message, link, type)
                 VALUES (:uid, :aid, 'Novo Feedback', 'Seu gestor registrou uma mensagem de desenvolvimento para você.', '/feedbacks', 'SYSTEM')
             """), {
-                "uid": data['user_id'], # ID do funcionário
-                "aid": session['user_id'] # ID do gestor (quem praticou a ação)
+                "uid": data['user_id'], 
+                "aid": session['user_id'] 
             })
-            
+
+            # 2. Notificação por E-mail (Nova implementação)
+            try:
+                # Busca dados do funcionário e do gestor para montar o e-mail
+                emp_data = db.execute(
+                    text("SELECT name, email FROM users WHERE id = :uid"), 
+                    {"uid": data['user_id']}
+                ).fetchone()
+
+                manager_data = db.execute(
+                    text("SELECT name FROM users WHERE id = :mid"), 
+                    {"mid": session['user_id']}
+                ).fetchone()
+
+                if emp_data and emp_data[1]: # Se tiver e-mail
+                    emp_name = emp_data[0]
+                    emp_email = emp_data[1]
+                    manager_name = manager_data[0] if manager_data else "Seu Gestor"
+
+                    subject = f"Cortex: Novo Feedback de {manager_name}"
+                    html_body = f"""
+                    <div style="font-family: sans-serif; color: #1E293B; max-width: 600px;">
+                        <h2 style="color: #6366F1;">Cortex</h2>
+                        <p>Olá, <strong>{emp_name}</strong>.</p>
+                        <p>{manager_name} acabou de registrar um feedback de desenvolvimento para você.</p>
+                        <div style="background-color: #F0FDF4; border-left: 4px solid #10B981; padding: 15px; margin: 20px 0; color: #064E3B;">
+                            "Nova mensagem de desenvolvimento disponível."
+                        </div>
+                        <p>Acesse a plataforma para ler o conteúdo completo e interagir.</p>
+                        <p style="margin-top: 25px;">
+                            <a href="{request.host_url.rstrip('/')}/feedbacks" style="background-color: #6366F1; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px;">Ler Feedback</a>
+                        </p>
+                    </div>
+                    """
+                    services.send_email_action(emp_email, subject, html_body)
+
+            except Exception as e:
+                print(f"Erro ao enviar e-mail de feedback: {e}")
+
         db.commit()
         return jsonify({"success": True, "feedback_id": result.fetchone()[0]})
     finally:
@@ -617,18 +656,59 @@ def update_feedback(feedback_id):
                 "fid": feedback_id
             })
 
-        # ✅ NOVO: Notifica o funcionário sobre a atualização
+        # ✅ NOVO: Notifica o funcionário sobre a atualização (Híbrido: App + Email)
         if feedback_for_employee and feedback_for_employee.strip():
-            # Evita duplicidade simples verificando se já existe notificação recente não lida? 
-            # Por simplicidade e urgência, notificamos sempre que o gestor edita e salva.
-            db.execute(text("""
-                INSERT INTO notifications (user_id, actor_id, title, message, link, type)
-                VALUES (:uid, :aid, 'Feedback Atualizado', 'Seu gestor atualizou seu feedback de desenvolvimento.', '/feedbacks', 'SYSTEM')
-            """), {
-                "uid": employee_id,
-                "aid": session['user_id']
-            })
-            
+            # Precisamos buscar os dados do funcionário atrelado a este feedback
+            # Fazemos um JOIN para pegar o ID, Nome e E-mail dele de uma vez
+            emp_res = db.execute(
+                text("""
+                    SELECT f.employee_id, u.name, u.email 
+                    FROM feedbacks f 
+                    JOIN users u ON f.employee_id = u.id 
+                    WHERE f.id = :fid
+                """), 
+                {"fid": feedback_id}
+            ).fetchone()
+
+            if emp_res:
+                emp_id = emp_res[0]
+                emp_name = emp_res[1]
+                emp_email = emp_res[2]
+
+                # 1. Notificação In-App
+                db.execute(text("""
+                    INSERT INTO notifications (user_id, actor_id, title, message, link, type)
+                    VALUES (:uid, :aid, 'Feedback Atualizado', 'Seu gestor atualizou seu feedback de desenvolvimento.', '/feedbacks', 'SYSTEM')
+                """), {
+                    "uid": emp_id,
+                    "aid": session['user_id']
+                })
+
+                # 2. Notificação por E-mail
+                try:
+                    if emp_email:
+                        # Busca nome do gestor atual (sessão)
+                        manager_name_res = db.execute(
+                            text("SELECT name FROM users WHERE id = :uid"), 
+                            {"uid": session['user_id']}
+                        ).fetchone()
+                        manager_name = manager_name_res[0] if manager_name_res else "Seu Gestor"
+
+                        subject = f"Cortex: Feedback Atualizado por {manager_name}"
+                        html_body = f"""
+                        <div style="font-family: sans-serif; color: #1E293B; max-width: 600px;">
+                            <h2 style="color: #6366F1;">Cortex</h2>
+                            <p>Olá, <strong>{emp_name}</strong>.</p>
+                            <p>{manager_name} atualizou as orientações no seu feedback de desenvolvimento.</p>
+                            <p style="margin-top: 25px;">
+                                <a href="{request.host_url.rstrip('/')}/feedbacks" style="background-color: #6366F1; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px;">Ver Atualizações</a>
+                            </p>
+                        </div>
+                        """
+                        services.send_email_action(emp_email, subject, html_body)
+                except Exception as e:
+                    print(f"Erro ao enviar e-mail de atualização de feedback: {e}")
+
         db.commit()
         return jsonify({"success": True})
     except Exception as e:
