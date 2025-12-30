@@ -427,7 +427,7 @@ def create_feedback():
                         </div>
                         <p>Acesse a plataforma para ler o conteúdo completo e interagir.</p>
                         <p style="margin-top: 25px;">
-                            <a href="{request.host_url.rstrip('/')}/feedbacks" style="background-color: #6366F1; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px;">Ler Feedback</a>
+                            <a href="{request.host_url.rstrip('/')}" style="background-color: #6366F1; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px;">Ler Feedback</a>
                         </p>
                     </div>
                     """
@@ -701,7 +701,7 @@ def update_feedback(feedback_id):
                             <p>Olá, <strong>{emp_name}</strong>.</p>
                             <p>{manager_name} atualizou as orientações no seu feedback de desenvolvimento.</p>
                             <p style="margin-top: 25px;">
-                                <a href="{request.host_url.rstrip('/')}/feedbacks" style="background-color: #6366F1; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px;">Ver Atualizações</a>
+                                <a href="{request.host_url.rstrip('/')}" style="background-color: #6366F1; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px;">Ver Atualizações</a>
                             </p>
                         </div>
                         """
