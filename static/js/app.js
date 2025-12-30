@@ -1038,18 +1038,26 @@ async function editFeedback(feedbackId) {
 async function updateFeedbackSubmit(event, feedbackId) {
     event.preventDefault();
 
-    const description = document.getElementById('feedback-description').value;
+    // --- CORREÇÃO: Usar innerText em vez de value ---
+    const description = document.getElementById('feedback-description').innerText;
+    // -----------------------------------------------
+
     const feedback_date = document.getElementById('feedback-date').value;
-    // ✅ Captura novos campos
+
+    // Transcrição é textarea, mantém .value
     const transcription = document.getElementById('feedback-transcription')?.value || '';
-    const feedback_for_employee = document.getElementById('feedback-employee-msg')?.value || '';
+
+    // --- CORREÇÃO: Usar innerText também para o campo do funcionário ---
+    // O operador ?. é mantido caso o elemento não exista em alguma view específica
+    const feedback_for_employee = document.getElementById('feedback-employee-msg')?.innerText || '';
+    // ------------------------------------------------------------------
 
     if (!feedback_date || !description) {
         showToast('Data e Registro Gerencial são obrigatórios', 'warning');
         return;
     }
 
-    const button = event.target; // O botão que foi clicado
+    const button = event.target; 
     button.disabled = true;
     button.textContent = 'Atualizando...';
 
