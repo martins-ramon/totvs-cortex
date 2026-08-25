@@ -31,7 +31,7 @@ def allowed_emails():
 def allowed_domains():
     domains = _parse_list(os.environ.get("ALLOWED_EMAIL_DOMAINS"))
     if not domains and not allowed_emails():
-        domains = ["totvs.com"]
+        domains = ["totvs.com.br"]
     return domains
 
 
