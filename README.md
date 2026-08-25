@@ -2,14 +2,14 @@
 
 Sistema web para apoio à gestão de um time de Inteligência Artificial: registro de reuniões 1:1 com transcrição, preparação inteligente das próximas conversas, checkpoints no formato Feedz e cards de acompanhamento do time gerados por IA.
 
-> Projeto em evolução (Fase 0 concluída — fundações da nova arquitetura). O sistema anterior (FeedbackAI) permanece operacional durante a transição; os dados legados são preservados e migrados para o novo modelo.
+Sistema single-user: apenas o diretor autentica via Google (allowlist TOTVS); liderados são perfis sem login.
 
 ## Stack
 
 - **Backend**: Python 3.11+ / Flask (pacote `cortex/`)
-- **IA**: OpenAI (`gpt-4o` para análise, `text-embedding-3-small` para embeddings legados)
-- **Banco**: PostgreSQL no Supabase (extensão pgvector habilitada)
-- **Frontend**: HTML/CSS/JS vanilla, sem build step
+- **IA**: OpenAI (`gpt-4o-mini` para extrações/cards, `gpt-4o` para agenda sugerida)
+- **Banco**: PostgreSQL no Supabase (sem extensões adicionais)
+- **Frontend**: HTML/CSS/JS vanilla + Alpine.js via CDN, sem build step
 - **Hospedagem**: Replit (Autoscale)
 
 ## Como rodar
@@ -34,13 +34,11 @@ Produção (Replit): `gunicorn app:app --bind 0.0.0.0:5000 --workers 4 --timeout
 
 Redirect URI do Google OAuth: `https://<seu-repl>.replit.app/api/auth/google/callback`
 
-### Migração de dados legados
+### Limpeza de tabelas legadas
 
 ```bash
-python -m cortex.migrate_data   # idempotente; preserva tabelas antigas intactas
+python -m cortex.drop_legacy   # idempotente; remove tabelas do FeedbackAI antigo
 ```
-
-Define `DIRECTOR_EMAILS` (ou `ALLOWED_EMAILS`) antes de rodar — esses usuários não são convertidos em "pessoas".
 
 ## Arquitetura (resumo)
 
@@ -48,18 +46,17 @@ Define `DIRECTOR_EMAILS` (ou `ALLOWED_EMAILS`) antes de rodar — esses usuário
 app.py                  # entrypoint enxuto (Gunicorn: gunicorn app:app)
 cortex/
 ├── __init__.py         # create_app() + /healthz
-├── database.py         # engine lazy + DDL legado/novo (sem Alembic)
+├── database.py         # engine lazy + DDL evolutivo (sem Alembic)
 ├── security.py         # allowlist de e-mails + login_required
-├── ai/                 # camada OpenAI + e-mail (MailerSend)
-├── views/              # blueprints: auth, people, feedback,
-│                       #   oneonones, notifications, staff, webhooks
-└── migrate_data.py     # migração legado -> novo schema
-static/                 # SPA vanilla JS (index.html + login.html)
+├── ai/                 # camada OpenAI (4 features de IA)
+├── views/              # blueprints: auth, people, sessions,
+│                       #   checkpoints, cards
+└── drop_legacy.py      # limpeza idempotente das tabelas antigas
+static/                 # SPA Alpine.js (index.html + login.html)
 ```
 
 - **Startup resiliente**: falta de banco/chave OpenAI não derruba a aplicação; `/healthz` reporta `status: ok|degraded` com detalhes.
-- **Schema novo sem pgvector**: `people`, `one_on_ones`, `commitments`, `checkpoints`, `card_jobs`, `member_cards`.
-- **Schema legado preservado**: `users`, `feedbacks`, `meetings`, `meeting_chunks`, `insights`, `agents`, `agent_insights`, `notifications`.
+- **Schema**: `users` (diretor) + `people`, `one_on_ones`, `commitments`, `checkpoints`, `card_jobs`, `member_cards`.
 
 ## Roadmap
 

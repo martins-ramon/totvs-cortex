@@ -20,15 +20,10 @@ def create_app():
 
     CORS(app, supports_credentials=True)
 
-    from .views import auth, people, feedback, oneonones, notifications, staff, webhooks
+    from .views import auth, people
     from .views import sessions, checkpoints, cards
     app.register_blueprint(auth.bp)
     app.register_blueprint(people.bp)
-    app.register_blueprint(feedback.bp)
-    app.register_blueprint(oneonones.bp)
-    app.register_blueprint(notifications.bp)
-    app.register_blueprint(staff.bp)
-    app.register_blueprint(webhooks.bp)
     app.register_blueprint(sessions.bp)
     app.register_blueprint(checkpoints.bp)
     app.register_blueprint(cards.bp)

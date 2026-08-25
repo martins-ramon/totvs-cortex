@@ -67,12 +67,10 @@ def db_session():
 
 
 # ---------------------------------------------------------------------------
-# SCHEMA LEGADO (FeedbackAI original) — preservado para migração/histórico.
-# Depende de pgvector em duas tabelas; falhas individuais são registradas e
-# não interrompem a criação das demais tabelas.
+# Autenticação (diretor) — única tabela do modelo antigo que permanece.
 # ---------------------------------------------------------------------------
 
-_LEGACY_DDL = [
+_AUTH_DDL = [
     ("""
     CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -90,102 +88,10 @@ _LEGACY_DDL = [
         google_id VARCHAR(255) UNIQUE
     )
     """, "users"),
-    ("CREATE INDEX IF NOT EXISTS idx_users_name_normalized ON users (name_normalized)", "idx_users_name_normalized"),
-    ("""
-    CREATE TABLE IF NOT EXISTS feedbacks (
-        id SERIAL PRIMARY KEY,
-        employee_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        manager_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        description TEXT NOT NULL,
-        transcription TEXT,
-        feedback_for_employee TEXT,
-        feedback_date DATE NOT NULL,
-        embedding vector(1536),
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-    )
-    """, "feedbacks"),
-    ("""
-    CREATE TABLE IF NOT EXISTS insights (
-        id SERIAL PRIMARY KEY,
-        employee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        manager_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        insight_data TEXT NOT NULL,
-        generated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        source_feedback_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
-        UNIQUE(employee_id, manager_id)
-    )
-    """, "insights"),
-    ("""
-    CREATE TABLE IF NOT EXISTS meetings (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        meeting_date DATE NOT NULL,
-        transcription TEXT,
-        summary TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """, "meetings"),
-    ("""
-    CREATE TABLE IF NOT EXISTS meeting_chunks (
-        id SERIAL PRIMARY KEY,
-        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
-        chunk_text TEXT NOT NULL,
-        embedding vector(1536),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """, "meeting_chunks"),
-    ("""
-    CREATE TABLE IF NOT EXISTS meeting_access (
-        id SERIAL PRIMARY KEY,
-        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(meeting_id, user_id)
-    )
-    """, "meeting_access"),
-    ("""
-    CREATE TABLE IF NOT EXISTS notifications (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        type VARCHAR(50) DEFAULT 'SYSTEM',
-        title VARCHAR(255) NOT NULL,
-        message TEXT,
-        link VARCHAR(255),
-        is_read BOOLEAN DEFAULT FALSE,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-    )
-    """, "notifications"),
-    ("""
-    CREATE TABLE IF NOT EXISTS agents (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(100) UNIQUE NOT NULL,
-        role VARCHAR(100),
-        description TEXT,
-        avatar_style VARCHAR(50),
-        last_active_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """, "agents"),
-    ("""
-    CREATE TABLE IF NOT EXISTS agent_insights (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        agent_name VARCHAR(100),
-        title VARCHAR(255) NOT NULL,
-        observation TEXT,
-        solution_proposal TEXT,
-        severity VARCHAR(20),
-        category VARCHAR(50),
-        action_payload TEXT,
-        is_archived BOOLEAN DEFAULT FALSE,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-    )
-    """, "agent_insights"),
 ]
 
 # ---------------------------------------------------------------------------
-# NOVO SCHEMA (Cortex — gestão 1:1 e performance). Sem dependência de pgvector.
+# Schema Cortex (gestão 1:1 e performance) — sem dependência de pgvector.
 # ---------------------------------------------------------------------------
 
 _NEW_DDL = [
@@ -286,6 +192,11 @@ _NEW_DDL = [
     ("CREATE INDEX IF NOT EXISTS idx_member_cards_person ON member_cards (person_id, generated_at DESC)", "idx_member_cards_person"),
 ]
 
+# Evoluções incrementais (colunas adicionadas após a primeira versão das tabelas)
+_EVOLUTION_DDL = [
+    ("ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS extraction_json JSONB", "one_on_ones.extraction_json"),
+]
+
 
 def init_db():
     """Executa o DDL evolutivo. Nunca levanta exceção para cima: registra o
@@ -301,44 +212,16 @@ def init_db():
         return
 
     with engine.connect() as conn:
-        # Extensão pgvector (necessária apenas para as tabelas legadas)
-        try:
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            log.warning(f"Extensão pgvector indisponível (tabelas legadas com vetor serão ignoradas): {e}")
-
-        for ddl, name in _LEGACY_DDL:
+        for ddl, name in _AUTH_DDL + _NEW_DDL:
             try:
                 conn.execute(text(ddl))
                 conn.commit()
             except Exception as e:
                 conn.rollback()
-                log.warning(f"DDL legado '{name}' pulado: {e}")
-
-        # Migração pontual legada: remover coluna embedding de meetings
-        try:
-            conn.execute(text("ALTER TABLE meetings DROP COLUMN embedding"))
-            conn.commit()
-            log.info("Coluna 'embedding' removida da tabela 'meetings'.")
-        except Exception:
-            conn.rollback()
-
-        for ddl, name in _NEW_DDL:
-            try:
-                conn.execute(text(ddl))
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                log.error(f"DDL novo '{name}' falhou: {e}")
+                log.error(f"DDL '{name}' falhou: {e}")
                 INIT_DB_STATUS = f"error:{name}:{e}"
                 return
 
-        # Evolução incremental do novo schema (tabelas já criadas por versões antigas)
-        _EVOLUTION_DDL = [
-            ("ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS extraction_json JSONB", "one_on_ones.extraction_json"),
-        ]
         for ddl, name in _EVOLUTION_DDL:
             try:
                 conn.execute(text(ddl))

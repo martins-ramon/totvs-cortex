@@ -1,17 +1,14 @@
 [project]
 name = "repl-nix-workspace"
 version = "0.1.0"
-description = "Add your description here"
+description = "Cortex — copiloto de gestão 1:1 e performance de times"
 requires-python = ">=3.11"
 dependencies = [
-    "apscheduler>=3.10.0",
     "flask>=3.1.2",
     "flask-cors>=5.0.0",
     "gunicorn>=23.0.0",
     "openai>=2.3.0",
-    "pgvector>=0.4.1",
     "psycopg2-binary>=2.9.11",
-    "python-dotenv>=1.1.1",
     "requests>=2.32.0",
     "sqlalchemy>=2.0.44",
     "unidecode>=1.4.0",
