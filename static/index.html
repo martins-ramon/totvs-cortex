@@ -477,7 +477,7 @@
     </div>
 
     <!-- ============ MODAL: PESSOA ============ -->
-    <div class="modal" :class="{open: showPersonModal}" style="display:flex;" x-show="showPersonModal">
+    <div class="modal" :class="{open: showPersonModal}" x-show="showPersonModal">
         <div class="modal-content" @click.outside="showPersonModal=false">
             <span class="close" @click="showPersonModal=false">×</span>
             <h3 x-text="editingPerson ? 'Editar pessoa' : 'Nova pessoa'"></h3>
@@ -496,7 +496,7 @@
     </div>
 
     <!-- ============ MODAL: REGISTRAR 1:1 ============ -->
-    <div class="modal" x-show="showSessionModal" style="display:flex;">
+    <div class="modal" :class="{open: showSessionModal}" x-show="showSessionModal">
         <div class="modal-content modal-wide" @click.outside="showSessionModal=false">
             <span class="close" @click="showSessionModal=false">×</span>
             <h3>Registrar 1:1</h3>
@@ -522,7 +522,7 @@
     </div>
 
     <!-- ============ MODAL: DETALHE DA SESSÃO + IA ============ -->
-    <div class="modal" x-show="!!sessionDetail" style="display:flex;">
+    <div class="modal" :class="{open: !!sessionDetail}" x-show="!!sessionDetail">
         <div class="modal-content modal-wide" @click.outside="sessionDetail=null">
             <span class="close" @click="sessionDetail=null">×</span>
             <template x-if="sessionDetail">
@@ -590,7 +590,7 @@
     </div>
 
     <!-- ============ MODAL: CHECKPOINT (FEEDZ) ============ -->
-    <div class="modal" x-show="showCpModal" style="display:flex;">
+    <div class="modal" :class="{open: showCpModal}" x-show="showCpModal">
         <div class="modal-content modal-wide" @click.outside="showCpModal=false">
             <span class="close" @click="showCpModal=false">×</span>
             <h3 x-text="editingCp ? 'Editar checkpoint' : 'Novo checkpoint'"></h3>
