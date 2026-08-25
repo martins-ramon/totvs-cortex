@@ -207,6 +207,10 @@
                                                 </div>
                                             </div>
                                         </template>
+                                        <div class="btn-row" style="margin-top:0.9rem; margin-bottom:0;">
+                                            <button class="btn-small btn-edit" @click="openEditSession(s)">✏️ Editar</button>
+                                            <button class="btn-small btn-delete" @click="deleteSession(s)">🗑️ Excluir</button>
+                                        </div>
                                     </div>
                                 </div>
                             </template>
@@ -495,11 +499,11 @@
         </div>
     </div>
 
-    <!-- ============ MODAL: REGISTRAR 1:1 ============ -->
-    <div class="modal" :class="{open: showSessionModal}" x-show="showSessionModal">
-        <div class="modal-content modal-wide" @click.outside="showSessionModal=false">
-            <span class="close" @click="showSessionModal=false">×</span>
-            <h3>Registrar 1:1</h3>
+            <!-- ============ MODAL: REGISTRAR / EDITAR 1:1 ============ -->
+            <div class="modal" :class="{open: showSessionModal}" x-show="showSessionModal">
+                <div class="modal-content modal-wide" @click.outside="showSessionModal=false">
+                    <span class="close" @click="showSessionModal=false">×</span>
+                    <h3 x-text="editingSessionId ? 'Editar 1:1' : 'Registrar 1:1'"></h3>
             <div class="two-col-form">
                 <div class="form-group"><label>Pessoa *</label>
                     <select class="form-control" x-model="sessionForm.person_id">
@@ -512,11 +516,12 @@
             <div class="form-group"><label>Título</label><input class="form-control" x-model="sessionForm.title" placeholder="Ex.: 1:1 quinzenal — alinhamento Q4"></div>
             <div class="form-group">
                 <label>Transcrição do Google Meet</label>
-                <textarea class="form-control mono" rows="10" x-model="sessionForm.transcript_raw" placeholder="Cole aqui a transcrição (Meet → Atividades → Transcrição). A IA extrai resumo, combinados e pontos de atenção."></textarea>
+                <textarea class="form-control mono" rows="10" x-model="sessionForm.transcript_raw" placeholder="Cole aqui a transcrição (Meet → Atividades → Transcrição). A IA extrai resumo, combinados e pontos de atenção. Se alterar uma transcrição existente, os insights serão refeitos automaticamente."></textarea>
                 <small class="form-hint">Dica: no Google Meet, abra "Atividades → Transcrição" e copie o texto completo.</small>
             </div>
             <button class="btn-primary btn-inline" @click="saveSession()" :disabled="savingSession">
-                <span x-show="!savingSession">Salvar 1:1</span><span x-show="savingSession">Salvando…</span>
+                <span x-show="!savingSession" x-text="editingSessionId ? 'Salvar alterações' : 'Salvar 1:1'"></span>
+                <span x-show="savingSession">Salvando…</span>
             </button>
         </div>
     </div>

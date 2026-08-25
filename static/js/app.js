@@ -34,6 +34,8 @@ function cortexApp() {
         showSessionModal: false,
         sessionForm: {},
         savingSession: false,
+        editingSessionId: null,
+        editingOriginalTranscript: '',
 
         sessionDetail: null,
         extracting: false,
@@ -319,7 +321,7 @@ function cortexApp() {
             return Math.floor((Date.now() - new Date(iso + 'T12:00:00')) / 86400000);
         },
         personName(pid) {
-            const p = this.people.find(x => x.id === pid);
+            const p = this.people.find(x => String(x.id) === String(pid));
             return p ? p.full_name : '(pessoa removida)';
         },
         ownerLabel(owner) {
@@ -394,6 +396,8 @@ function cortexApp() {
 
         // --- modal 1:1 ---
         openSessionModal(personId = null) {
+            this.editingSessionId = null;
+            this.editingOriginalTranscript = '';
             this.sessionForm = {
                 person_id: personId || '',
                 occurred_on: new Date().toISOString().slice(0, 10),
@@ -402,33 +406,92 @@ function cortexApp() {
             };
             this.showSessionModal = true;
         },
+        async openEditSession(s) {
+            try {
+                const d = await this.api('/api/oneonones/' + s.id);
+                const sess = d.session;
+                this.editingSessionId = sess.id;
+                this.editingOriginalTranscript = sess.transcript_raw || '';
+                this.sessionForm = {
+                    person_id: sess.person_id,
+                    occurred_on: sess.occurred_on,
+                    title: sess.title || '',
+                    transcript_raw: sess.transcript_raw || ''
+                };
+                this.showSessionModal = true;
+            } catch (e) {
+                showToast(e.message, 'error');
+            }
+        },
+        async deleteSession(s) {
+            if (!confirm('Excluir este registro de 1:1? Os combinados vinculados permanecem no histórico.')) return;
+            try {
+                await this.api('/api/oneonones/' + s.id, { method: 'DELETE' });
+                showToast('1:1 excluído.', 'success');
+                if (this.sessionDetail && this.sessionDetail.id === s.id) this.sessionDetail = null;
+                await this.loadRecentSessions();
+                if (this.currentPerson) await this.loadPersonData();
+                if (this.prepPersonId) this.loadPrep();
+            } catch (e) {
+                showToast(e.message, 'error');
+            }
+        },
         async saveSession() {
             const f = this.sessionForm;
             if (!f.person_id) { showToast('Selecione a pessoa.', 'warning'); return; }
             if (!f.occurred_on) { showToast('Informe a data.', 'warning'); return; }
             this.savingSession = true;
+            let sessionId;
             try {
-                const d = await this.api('/api/oneonones', {
-                    method: 'POST', body: JSON.stringify(f)
-                });
-                showToast('1:1 registrado!', 'success');
+                if (this.editingSessionId) {
+                    await this.api('/api/oneonones/' + this.editingSessionId, {
+                        method: 'PUT', body: JSON.stringify(f)
+                    });
+                    sessionId = this.editingSessionId;
+                    showToast('1:1 atualizado!', 'success');
+                } else {
+                    const d = await this.api('/api/oneonones', {
+                        method: 'POST', body: JSON.stringify(f)
+                    });
+                    sessionId = d.session_id;
+                    showToast('1:1 registrado!', 'success');
+                }
                 this.showSessionModal = false;
                 await this.loadRecentSessions();
                 if (this.currentPerson && String(this.currentPerson.id) === String(f.person_id)) {
                     await this.loadPersonData();
                 }
                 if (this.prepPersonId === String(f.person_id)) this.loadPrep();
-                // Automação: se há transcrição, abre a sessão e extrai insights já
-                if ((f.transcript_raw || '').trim().length > 40) {
-                    await this.viewSession(d.session_id);
-                    this.extractSession(true);
-                } else {
-                    await this.viewSession(d.session_id);
+
+                // Transcrição nova ou alterada -> refaz os insights.
+                // Se a modal da reunião estiver aberta, atualiza-a; senão, apenas notifica.
+                const hasTranscript = (f.transcript_raw || '').trim().length > 40;
+                const transcriptChanged = !this.editingSessionId ||
+                    (f.transcript_raw || '') !== this.editingOriginalTranscript;
+                if (hasTranscript && transcriptChanged) {
+                    const detailOpen = this.sessionDetail && this.sessionDetail.id === sessionId;
+                    showToast('✨ Extraindo insights da transcrição…', 'info');
+                    try {
+                        const d = await this.api(`/api/oneonones/${sessionId}/extract`, { method: 'POST' });
+                        if (detailOpen) await this.viewSession(sessionId);
+                        const n = (d.session.extraction && d.session.extraction.combinados)
+                            ? d.session.extraction.combinados.length : 0;
+                        showToast(`Insights extraídos${n ? ` — ${n} combinado(s) criado(s)` : ''}!`, 'success');
+                        await this.loadRecentSessions();
+                        if (this.currentPerson && String(this.currentPerson.id) === String(f.person_id)) {
+                            await this.loadPersonData();
+                        }
+                        if (this.prepPersonId === String(f.person_id)) this.loadPrep();
+                    } catch (e) {
+                        showToast('Falha na extração: ' + e.message, 'error');
+                    }
                 }
             } catch (e) {
                 showToast(e.message, 'error');
             } finally {
                 this.savingSession = false;
+                this.editingSessionId = null;
+                this.editingOriginalTranscript = '';
             }
         },
         async viewSession(id) {
