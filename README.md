@@ -1,73 +1,72 @@
-# FeedbackAI - Sistema de Feedback Assistido por IA
+# Cortex — Copiloto de Gestão 1:1 e Performance
 
-Sistema revolucionário de feedback que transforma gestores em "gestores aumentados" com produtividade 10x através de insights inteligentes gerados por IA.
+Sistema web para apoio à gestão de um time de Inteligência Artificial: registro de reuniões 1:1 com transcrição, preparação inteligente das próximas conversas, checkpoints no formato Feedz e cards de acompanhamento do time gerados por IA.
 
-## 🚀 Funcionalidades
+> Projeto em evolução (Fase 0 concluída — fundações da nova arquitetura). O sistema anterior (FeedbackAI) permanece operacional durante a transição; os dados legados são preservados e migrados para o novo modelo.
 
-- **Autenticação Completa**: Sistema de login/registro para gestores
-- **Gestão de Funcionários**: Cadastro e gerenciamento de funcionários vinculados ao gestor
-- **Feedback Avançado**: Formulário com campos específicos e vetorização automática para RAG
-- **Dashboard Inteligente**: Insights automáticos sobre:
-  - Pontos de desenvolvimento
-  - Fortalezas da equipe
-  - Riscos de saída (turnover)
-  - Situações que requerem atenção
+## Stack
 
-## 📊 Tecnologias
+- **Backend**: Python 3.11+ / Flask (pacote `cortex/`)
+- **IA**: OpenAI (`gpt-4o` para análise, `text-embedding-3-small` para embeddings legados)
+- **Banco**: PostgreSQL no Supabase (extensão pgvector habilitada)
+- **Frontend**: HTML/CSS/JS vanilla, sem build step
+- **Hospedagem**: Replit (Autoscale)
 
-- **Frontend**: HTML5, CSS3, Vanilla JavaScript
-- **Backend**: Python Flask
-- **Database**: PostgreSQL com pgvector
-- **IA**: OpenAI (embeddings + GPT-4)
+## Como rodar
 
-## ⚙️ Configuração
+```bash
+uv sync              # instala dependências
+python app.py        # servidor de desenvolvimento em http://localhost:5000
+```
 
-### Opção 1: Usar Database do Replit (Recomendado)
+Produção (Replit): `gunicorn app:app --bind 0.0.0.0:5000 --workers 4 --timeout 120`
 
-1. No painel do Replit, vá em "Tools" → "Database"
-2. Crie um novo PostgreSQL database
-3. A variável `DATABASE_URL` será automaticamente configurada
+### Variáveis de ambiente (Secrets no Replit)
 
-### Opção 2: Usar Supabase
+| Secret | Uso |
+|---|---|
+| `DATABASE_URL` | Postgres Supabase — **Transaction Pooler, porta 6543** (não usar 5432) |
+| `OPENAI_API_KEY` | Geração de resumos/insights e embeddings |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Login com Google Workspace (TOTVS) |
+| `ALLOWED_EMAILS` | E-mails autorizados a logar (ex.: o seu) |
+| `ALLOWED_EMAIL_DOMAINS` | Domínios autorizados (padrão: `totvs.com`) |
+| `SESSION_SECRET` | Segredo das sessões Flask (defina em produção!) |
 
-Se você preferir usar Supabase, você precisa do **Transaction Pooler** (porta 6543):
+Redirect URI do Google OAuth: `https://<seu-repl>.replit.app/api/auth/google/callback`
 
-1. Vá para [Supabase Dashboard](https://supabase.com/dashboard/projects)
-2. Selecione seu projeto
-3. Clique em "Connect" no topo
-4. Escolha "Transaction pooler" (não "Direct connection")
-5. Copie a URI que usa porta **6543** (não 5432)
-6. Adicione como secret `DATABASE_URL`
+### Migração de dados legados
 
-**IMPORTANTE**: A porta deve ser 6543 (pooler), não 5432 (direct). Conexões diretas (porta 5432) podem não funcionar no Replit.
+```bash
+python -m cortex.migrate_data   # idempotente; preserva tabelas antigas intactas
+```
 
-### Secrets Necessários
+Define `DIRECTOR_EMAILS` (ou `ALLOWED_EMAILS`) antes de rodar — esses usuários não são convertidos em "pessoas".
 
-- `DATABASE_URL`: String de conexão PostgreSQL
-- `OPENAI_API_KEY`: Chave da API OpenAI
-- `SESSION_SECRET`: (opcional) Chave secreta para sessões
+## Arquitetura (resumo)
 
-## 🎨 Design
+```
+app.py                  # entrypoint enxuto (Gunicorn: gunicorn app:app)
+cortex/
+├── __init__.py         # create_app() + /healthz
+├── database.py         # engine lazy + DDL legado/novo (sem Alembic)
+├── security.py         # allowlist de e-mails + login_required
+├── ai/                 # camada OpenAI + e-mail (MailerSend)
+├── views/              # blueprints: auth, people, feedback,
+│                       #   oneonones, notifications, staff, webhooks
+└── migrate_data.py     # migração legado -> novo schema
+static/                 # SPA vanilla JS (index.html + login.html)
+```
 
-Interface inspirada em Lattice e 15Five com:
-- Cores: Indigo (#6366F1), Verde (#10B981), Amarelo (#F59E0B)
-- Design moderno com cards e animações suaves
-- Layout responsivo
+- **Startup resiliente**: falta de banco/chave OpenAI não derruba a aplicação; `/healthz` reporta `status: ok|degraded` com detalhes.
+- **Schema novo sem pgvector**: `people`, `one_on_ones`, `commitments`, `checkpoints`, `card_jobs`, `member_cards`.
+- **Schema legado preservado**: `users`, `feedbacks`, `meetings`, `meeting_chunks`, `insights`, `agents`, `agent_insights`, `notifications`.
 
-## 📝 Como Usar
+## Roadmap
 
-1. **Registre-se** com email, nome e empresa
-2. **Adicione funcionários** na seção "Funcionários"
-3. **Cadastre feedbacks** com insights completos
-4. **Veja o Dashboard** com análises automáticas geradas por IA
+- [x] **F0 — Fundações**: arquitetura em pacotes, allowlist TOTVS no login Google, schema novo + migração dos dados legados
+- [x] **F1 — Núcleo 1:1**: cadastro de pessoas, registro com transcrição do Meet e extração IA automática (combinados, atenção, desenvolvimento, sentimento), tela "Preparar 1:1" com agenda sugerida
+- [x] **F2 — Checkpoints Feedz**: colar texto do Feedz → IA estrutura ações/responsáveis/notas privadas/públicas
+- [x] **F3 — Cards do Time**: geração assíncrona por botão com barra de progresso; saúde 🟢🟡🔴, tendência, cadência de 1:1s, accountability e riscos
+- [ ] **F4 — Automação**: agendamento semanal (Scheduled Deployments ou n8n externo)
 
-## 🔒 Segurança
-
-- **Senhas seguras com PBKDF2**: Hashing moderno usando werkzeug.security com salt automático
-- **Sessões seguras**: Flask sessions com secret key
-- **Variáveis de ambiente**: Credenciais protegidas em secrets
-- **Proteção CORS**: Configurado para segurança de APIs
-
-### ⚠️ Importante: Usuários Existentes
-
-Após a atualização de segurança, usuários que já tinham conta precisarão se **registrar novamente** (o sistema anterior usava hash inseguro).
+Ver `SETUP_INSTRUCTIONS.md` para detalhes de conexão com o Supabase.

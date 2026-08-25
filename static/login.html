@@ -14,32 +14,12 @@
             <h1 class="auth-title">Cortex</h1>
             <p class="auth-subtitle">Inteligência ao seu lado. Menos rotina, mais impacto.</p>
 
-            <div id="login-form" class="auth-form">
-                <h2>Login</h2>
+            <button onclick="loginWithGoogle()" class="btn-google">
+                <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google" class="google-icon">
+                Entrar com conta TOTVS (Google)
+            </button>
 
-                <button onclick="loginWithGoogle()" class="btn-google">
-                    <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google" class="google-icon">
-                    Continuar com Google
-                </button>
-
-                <div class="auth-divider"><span>ou continue com email</span></div>
-
-                <input type="email" id="login-email" placeholder="Email" required>
-                <input type="password" id="login-password" placeholder="Senha" required>
-                <button onclick="login()" class="btn-primary">Entrar</button>
-                <p class="auth-switch">Não tem conta? <a href="#" onclick="showRegister()">Registre-se</a></p>
-            </div>
-
-            <div id="register-form" class="auth-form" style="display: none;">
-                <h2>Registrar</h2>
-                <input type="text" id="register-name" placeholder="Nome completo" required>
-                <input type="email" id="register-email" placeholder="Email" required>
-                <input type="text" id="register-company" placeholder="Empresa" required>
-                <input type="tel" id="register-phone" placeholder="Telefone (opcional)">
-                <input type="password" id="register-password" placeholder="Senha" required>
-                <button onclick="register()" class="btn-primary">Criar conta</button>
-                <p class="auth-switch">Já tem conta? <a href="#" onclick="showLogin()">Faça login</a></p>
-            </div>
+            <p class="auth-switch" style="font-size:0.8rem;">Acesso exclusivo para e-mails autorizados.</p>
         </div>
     </div>
 

@@ -1,14 +1,4 @@
-// --- Lógica de UI ---
-
-function showLogin() {
-    document.getElementById('login-form').style.display = 'block';
-    document.getElementById('register-form').style.display = 'none';
-}
-
-function showRegister() {
-    document.getElementById('login-form').style.display = 'none';
-    document.getElementById('register-form').style.display = 'block';
-}
+// --- Lógica da página de login (apenas Google OAuth) ---
 
 function showToast(message, type = 'info', title = null) {
     const container = document.getElementById('toast-container');
@@ -25,71 +15,7 @@ function showToast(message, type = 'info', title = null) {
         <div class="toast-close" onclick="this.parentElement.remove()">×</div>
     `;
     container.appendChild(toast);
-    setTimeout(() => toast.remove(), 5000);
-}
-
-
-// --- Lógica de API ---
-
-async function login() {
-    const email = document.getElementById('login-email').value;
-    const password = document.getElementById('login-password').value;
-    if (!email || !password) {
-        showToast('Preencha todos os campos', 'warning');
-        return;
-    }
-    try {
-        const response = await fetch('/api/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ email, password })
-        });
-        const data = await response.json();
-        if (data.success && data.user) {
-            // ---- ALTERAÇÃO PRINCIPAL AQUI ----
-            // Salva os dados do usuário no sessionStorage para a próxima página ler.
-            sessionStorage.setItem('currentUser', JSON.stringify(data.user));
-
-            showToast('Login realizado com sucesso!', 'success');
-            window.location.href = '/';
-        } else {
-            showToast('Credenciais inválidas', 'error');
-        }
-    } catch (error) {
-        showToast('Erro ao fazer login', 'error');
-    }
-}
-
-async function register() {
-    const name = document.getElementById('register-name').value;
-    const company = document.getElementById('register-company').value;
-    const phone = document.getElementById('register-phone').value;
-    const email = document.getElementById('register-email').value;
-    const password = document.getElementById('register-password').value;
-    if (!name || !company || !email || !password) {
-        showToast('Preencha todos os campos obrigatórios', 'warning');
-        return;
-    }
-    try {
-        const response = await fetch('/api/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ name, company, phone, email, password })
-        });
-        const data = await response.json();
-        if (data.success) {
-            // Para o registro, o ideal é logar o usuário em seguida para obter o objeto completo.
-            // Mas, para simplificar, vamos apenas redirecionar e deixar o checkAuth da próxima página validar.
-            showToast('Conta criada com sucesso! Redirecionando...', 'success');
-            window.location.href = '/';
-        } else {
-            showToast('Erro ao criar conta: ' + (data.error || ''), 'error');
-        }
-    } catch (error) {
-        showToast('Erro ao registrar', 'error');
-    }
+    setTimeout(() => toast.remove(), 6000);
 }
 
 async function loginWithGoogle() {
@@ -105,3 +31,18 @@ async function loginWithGoogle() {
         showToast('Erro de conexão', 'error');
     }
 }
+
+// --- Mensagens vindas do OAuth (query params) ---
+(function () {
+    const params = new URLSearchParams(window.location.search);
+    const error = params.get('error');
+    const success = params.get('success');
+    const messages = {
+        'forbidden': 'Acesso restrito a contas TOTVS autorizadas.',
+        'google_account_already_linked': 'Esta conta Google já está vinculada a outro usuário.',
+        'session_expired': 'Sessão expirada. Faça login novamente.'
+    };
+    if (error && messages[error]) showToast(messages[error], 'error');
+    else if (error) showToast('Falha na autenticação: ' + error, 'error');
+    if (success === 'google_linked') showToast('Conta Google vinculada com sucesso!', 'success');
+})();

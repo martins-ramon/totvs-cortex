@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Ambiente / segredos
+.env
+.env.*
+
+# Ferramentas
+.DS_Store
+*.log
+
+# Replit
+.replit_user_cache/
+upm_packages/
