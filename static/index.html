@@ -133,6 +133,8 @@
                                 <div class="grow">
                                     <h4 x-text="p.preferred_name || p.full_name"></h4>
                                     <small x-text="p.role_title || 'Cargo não definido'"></small>
+                                    <small class="person-email" x-show="p.email" x-text="p.email"></small>
+                                    <small class="person-email missing" x-show="!p.email">Sem e-mail — necessário para cruzar a caixa de entrada</small>
                                 </div>
                                 <span class="badge-inactive" x-show="!p.active">Inativo</span>
                             </div>
@@ -157,6 +159,8 @@
                             <div class="grow">
                                 <h2 x-text="currentPerson.full_name"></h2>
                                 <p x-text="currentPerson.role_title || 'Cargo não definido'"></p>
+                                <p class="person-email" x-show="currentPerson.email" x-text="currentPerson.email"></p>
+                                <p class="person-email missing" x-show="!currentPerson.email">E-mail não cadastrado — edite para cruzar threads no card</p>
                             </div>
                             <button class="btn-secondary btn-inline" @click="openPersonModal(currentPerson)">✏️ Editar</button>
                             <button class="btn-primary btn-inline" @click="openSessionModal(currentPerson.id)">＋ Registrar 1:1</button>
@@ -398,13 +402,24 @@
                 <template x-if="cardJob.running">
                     <div class="progress-panel">
                         <div class="progress-labels">
-                            <strong x-text="'Gerando card ' + (cardJob.done + 1) + '/' + cardJob.total"></strong>
-                            <span class="form-hint" x-text="cardJob.currentName ? 'Analisando: ' + cardJob.currentName : 'Iniciando…'"></span>
+                            <strong x-text="cardJob.currentName
+                                ? ('Card ' + Math.min(cardJob.done + 1, cardJob.total) + '/' + cardJob.total + ' — ' + cardJob.currentName)
+                                : 'Preparando atualização…'"></strong>
+                            <span class="progress-pct" x-text="progressPct + '%'"></span>
                         </div>
                         <div class="progress-track">
                             <div class="progress-fill" :style="'width:' + progressPct + '%'"></div>
                         </div>
-                        <small class="form-hint" x-text="cardJob.errors ? cardJob.errors + ' falha(s) até agora' : ''"></small>
+                        <p class="progress-detail" x-show="cardJob.stepDetail" x-text="cardJob.stepDetail"></p>
+                        <ol class="progress-steps">
+                            <template x-for="step in cardSteps" :key="step.key">
+                                <li :class="cardStepClass(step.key)">
+                                    <span class="step-mark" x-text="cardStepMark(step.key)"></span>
+                                    <span x-text="step.label"></span>
+                                </li>
+                            </template>
+                        </ol>
+                        <small class="form-hint" x-show="cardJob.errors" x-text="cardJob.errors + ' falha(s) até agora'"></small>
                     </div>
                 </template>
 
@@ -436,6 +451,23 @@
                             </div>
 
                             <p class="member-resumo" x-text="cards[pid].card_json.ai?.resumo"></p>
+
+                            <div class="email-insights" x-show="cardHasEmailInsights(cards[pid])">
+                                <h5>✉️ Inbox em andamento <small x-text="emailThreadHint(cards[pid])"></small></h5>
+                                <ul>
+                                    <template x-for="(x,i) in (cards[pid].card_json.emails?.pendencias || [])" :key="'p'+i">
+                                        <li><span class="email-tag">Pendência</span> <span x-text="x"></span></li>
+                                    </template>
+                                    <template x-for="(x,i) in (cards[pid].card_json.emails?.todos || [])" :key="'t'+i">
+                                        <li><span class="email-tag todo">To-do</span> <span x-text="x"></span></li>
+                                    </template>
+                                    <template x-for="(x,i) in (cards[pid].card_json.emails?.assuntos || [])" :key="'a'+i">
+                                        <li><span class="email-tag topic">Assunto</span> <span x-text="x"></span></li>
+                                    </template>
+                                </ul>
+                            </div>
+                            <p class="email-skip" x-show="cards[pid].card_json.emails?.skipped"
+                               x-text="emailSkipLabel(cards[pid].card_json.emails?.skipped)"></p>
 
                             <template x-if="(cards[pid].card_json.ai?.riscos || []).length">
                                 <div class="risk-boxes">
@@ -524,6 +556,7 @@
 
                 <p class="form-hint" style="margin-top:1.25rem;">
                     O acesso ao Gmail é somente para leitura — o Cortex nunca envia ou apaga e-mails.
+                    Com o e-mail de cada liderado cadastrado, as threads em que ele participa alimentam o card.
                     Você pode desconectar quando quiser.
                 </p>
             </section>
@@ -542,7 +575,11 @@
                 <div class="form-group"><label>Cargo</label><input class="form-control" x-model="personForm.role_title" placeholder="Ex.: Engenheira de ML Sênior"></div>
             </div>
             <div class="two-col-form">
-                <div class="form-group"><label>E-mail</label><input class="form-control" x-model="personForm.email" type="email"></div>
+                <div class="form-group">
+                    <label>E-mail</label>
+                    <input class="form-control" x-model="personForm.email" type="email" placeholder="nome.sobrenome@totvs.com">
+                    <small class="form-hint">Usado para cruzar threads do Gmail no card de acompanhamento.</small>
+                </div>
                 <div class="form-group"><label>Início na função</label><input class="form-control" x-model="personForm.hired_at" type="date"></div>
             </div>
             <div class="form-group"><label>Anotações</label><textarea class="form-control" rows="2" x-model="personForm.notes" placeholder="Contexto geral, área de atuação…"></textarea></div>

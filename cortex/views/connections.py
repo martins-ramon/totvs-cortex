@@ -40,7 +40,7 @@ TOOLS = [
         "id": "gmail",
         "name": "Gmail",
         "icon": "✉️",
-        "description": "O Cortex encontra e organiza os seus 1:1s direto da caixa de entrada.",
+        "description": "Lê threads em que seus liderados participam e levanta pendências, to-dos e assuntos em andamento nos cards.",
         "available": True,
     },
     {

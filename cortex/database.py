@@ -211,6 +211,7 @@ _NEW_DDL = [
 # Evoluções incrementais (colunas adicionadas após a primeira versão das tabelas)
 _EVOLUTION_DDL = [
     ("ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS extraction_json JSONB", "one_on_ones.extraction_json"),
+    ("ALTER TABLE card_jobs ADD COLUMN IF NOT EXISTS progress_json JSONB", "card_jobs.progress_json"),
 ]
 
 

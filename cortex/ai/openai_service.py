@@ -153,13 +153,21 @@ em português do Brasil.
   "desenvolvimento": ["focos de crescimento ativos"],
   "conquistas": ["vitórias recentes a reconhecer"],
   "riscos": [{{"nivel": "baixo|medio|alto", "descricao": "risco identificado"}}],
-  "foco_sugerido": "o 1 tema mais importante para a próxima conversa 1:1"
+  "foco_sugerido": "o 1 tema mais importante para a próxima conversa 1:1",
+  "emails": {{
+    "pendencias": ["itens aguardando resposta, decisão ou desbloqueio nas threads"],
+    "todos": ["ações concretas mencionadas nos e-mails, ainda em andamento"],
+    "assuntos": ["temas importantes em curso nas threads (projetos, entregas, alinhamentos)"]
+  }}
 }}
 
 Diretrizes (Project Aristotle + alta performance):
 - "saude": verde = engajado e entregando; amarelo = sinais de atenção; vermelho = risco concreto.
 - Considere cadência de 1:1s (distância demais = risco de conexão), combinados vencidos
   (accountability — promessas não cumpridas corroem confiança) e sentimento das conversas.
+- Se houver seção E-MAILS no contexto, extraia pendências, to-dos e assuntos em "emails".
+  Use esses sinais também em pontos_atencao, riscos e foco_sugerido quando forem materiais.
+- Se não houver e-mails no contexto, retorne "emails" com listas vazias — nunca invente threads.
 - Seja específico citando fatos do contexto; nunca invente informações.
 - "riscos" pode ser lista vazia se não houver riscos reais.
 

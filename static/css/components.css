@@ -938,7 +938,9 @@ input:checked + .slider:before {
 .person-card.inactive { opacity: 0.6; }
 .person-card-head { display: flex; align-items: center; gap: 0.9rem; margin-bottom: 0.75rem; }
 .person-card-head h4 { font-size: 1.05rem; }
-.person-card-head small { color: #64748B; }
+.person-card-head small { color: #64748B; display: block; }
+.person-email { display: block; font-size: 0.8rem; color: #6366F1; margin-top: 0.15rem; word-break: break-all; }
+.person-email.missing { color: #94A3B8; font-style: italic; }
 .person-card-foot { border-top: 1px solid #F1F5F9; padding-top: 0.6rem; font-size: 0.85rem; }
 .badge-inactive { margin-left: auto; background: #F1F5F9; color: #94A3B8; font-size: 0.7rem; font-weight: 700; padding: 0.2rem 0.55rem; border-radius: 12px; text-transform: uppercase; }
 .text-warn { color: #DC2626; font-weight: 600; }
@@ -954,6 +956,8 @@ input:checked + .slider:before {
 .person-detail-head { display: flex; align-items: center; gap: 1.1rem; margin-bottom: 1.25rem; }
 .person-detail-head h2 { margin-bottom: 0; }
 .person-detail-head p { color: #64748B; }
+.person-detail-head .person-email { color: #6366F1; margin: 0.15rem 0 0; }
+.person-detail-head .person-email.missing { color: #94A3B8; }
 
 .tab-bar { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; border-bottom: 2px solid #F1F5F9; padding-bottom: 0.75rem; }
 
@@ -1042,8 +1046,25 @@ input:checked + .slider:before {
 
 .progress-panel { background: white; border-radius: 12px; padding: 1.1rem 1.4rem; box-shadow: 0 4px 12px rgba(99,102,241,0.12); margin-bottom: 1.4rem; border-left: 5px solid #6366F1; }
 .progress-labels { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.55rem; gap: 1rem; flex-wrap: wrap; }
+.progress-pct { font-weight: 700; color: #6366F1; font-size: 0.95rem; }
 .progress-track { height: 12px; background: #E2E8F0; border-radius: 20px; overflow: hidden; }
 .progress-fill { height: 100%; background: linear-gradient(90deg, #6366F1, #8B5CF6); border-radius: 20px; transition: width 0.4s ease; }
+.progress-detail { margin: 0.55rem 0 0.35rem; font-size: 0.84rem; color: #475569; }
+.progress-steps { list-style: none; margin: 0.7rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.progress-steps li { display: flex; align-items: center; gap: 0.5rem; font-size: 0.86rem; color: #94A3B8; }
+.progress-steps li.active { color: #4338CA; font-weight: 600; }
+.progress-steps li.done { color: #059669; }
+.progress-steps .step-mark { width: 1.1rem; text-align: center; font-size: 0.78rem; }
+
+.email-insights { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 0.7rem 0.85rem; }
+.email-insights h5 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: #475569; margin: 0 0 0.4rem; }
+.email-insights h5 small { text-transform: none; letter-spacing: 0; font-weight: 500; color: #94A3B8; }
+.email-insights ul { margin: 0; padding-left: 0; list-style: none; }
+.email-insights li { font-size: 0.84rem; color: #334155; margin-bottom: 0.3rem; line-height: 1.4; }
+.email-tag { display: inline-block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 0.1rem 0.4rem; border-radius: 6px; background: #FEE2E2; color: #991B1B; margin-right: 0.25rem; }
+.email-tag.todo { background: #FEF3C7; color: #92400E; }
+.email-tag.topic { background: #DBEAFE; color: #1E40AF; }
+.email-skip { font-size: 0.78rem; color: #94A3B8; margin: 0; }
 
 /* --- Conexões --- */
 .connections-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.25rem; }

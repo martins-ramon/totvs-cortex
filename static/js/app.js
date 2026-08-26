@@ -48,7 +48,17 @@ function cortexApp() {
 
         cards: {},
         cardsLoaded: false,
-        cardJob: { running: false, jobId: null, total: 0, done: 0, errors: 0, currentName: '' },
+        cardJob: {
+            running: false, jobId: null, total: 0, done: 0, errors: 0,
+            currentName: '', currentEmail: '', currentStep: '', stepKey: '',
+            stepDetail: '', stepsDone: []
+        },
+        cardSteps: [
+            { key: 'sessions', label: 'Avaliando registros de 1:1s e checkpoints' },
+            { key: 'emails', label: 'Avaliando e-mails da caixa de entrada' },
+            { key: 'synthesize', label: 'Sintetizando o card com IA' }
+        ],
+        _cardPollTimer: null,
 
         connections: [],
         connectionsLoading: false,
@@ -303,7 +313,9 @@ function cortexApp() {
         },
         get progressPct() {
             if (!this.cardJob.total) return 0;
-            return Math.round((this.cardJob.done / this.cardJob.total) * 100);
+            const stepFrac = { sessions: 0.2, emails: 0.5, synthesize: 0.85 };
+            const frac = stepFrac[this.cardJob.stepKey] || 0;
+            return Math.min(99, Math.round(((this.cardJob.done + frac) / this.cardJob.total) * 100));
         },
         get sortedCardIds() {
             const healthOrder = { vermelho: 0, amarelo: 1, verde: 2 };
@@ -393,6 +405,11 @@ function cortexApp() {
         },
         async savePerson() {
             if (!this.personForm.full_name.trim()) { showToast('Informe o nome.', 'warning'); return; }
+            const em = (this.personForm.email || '').trim();
+            if (em && (em.indexOf('@') < 1 || em.indexOf(' ') >= 0)) {
+                showToast('Informe um e-mail válido.', 'warning');
+                return;
+            }
             try {
                 if (this.editingPerson) {
                     await this.api('/api/people/' + this.editingPerson.id, {
@@ -639,22 +656,84 @@ function cortexApp() {
             if (t === 'caindo') return { emoji: '📉', label: 'em queda' };
             return { emoji: '➡️', label: 'estável' };
         },
+        cardStepClass(key) {
+            if ((this.cardJob.stepsDone || []).includes(key)) return 'done';
+            if (this.cardJob.stepKey === key) return 'active';
+            return '';
+        },
+        cardStepMark(key) {
+            if ((this.cardJob.stepsDone || []).includes(key)) return '✓';
+            if (this.cardJob.stepKey === key) return '●';
+            return '○';
+        },
+        cardHasEmailInsights(card) {
+            const e = card && card.card_json && card.card_json.emails;
+            if (!e) return false;
+            return (e.pendencias || []).length + (e.todos || []).length + (e.assuntos || []).length > 0;
+        },
+        emailThreadHint(card) {
+            const n = card && card.card_json && card.card_json.emails && card.card_json.emails.thread_count;
+            return n ? `(${n} thread${n === 1 ? '' : 's'})` : '';
+        },
+        emailSkipLabel(code) {
+            const map = {
+                sem_email: '✉️ Inbox não analisada — cadastre o e-mail da pessoa.',
+                gmail_nao_conectado: '✉️ Inbox não analisada — conecte o Gmail em Conexões.',
+                erro: '✉️ Inbox não analisada — falha ao ler a caixa de entrada.'
+            };
+            return map[code] || '';
+        },
+        startCardProgressPoll() {
+            this.stopCardProgressPoll();
+            const tick = async () => {
+                if (!this.cardJob.running || !this.cardJob.jobId) return;
+                try {
+                    const d = await this.api('/api/cards/job/' + this.cardJob.jobId);
+                    const p = d.progress || {};
+                    if (p.person_name) this.cardJob.currentName = p.person_name;
+                    if (p.person_email !== undefined) this.cardJob.currentEmail = p.person_email || '';
+                    this.cardJob.currentStep = p.label || this.cardJob.currentStep;
+                    this.cardJob.stepKey = p.step || '';
+                    this.cardJob.stepDetail = p.detail || '';
+                    this.cardJob.stepsDone = p.steps_done || [];
+                } catch (e) { /* poll é best-effort */ }
+                if (this.cardJob.running) {
+                    this._cardPollTimer = setTimeout(tick, 450);
+                }
+            };
+            tick();
+        },
+        stopCardProgressPoll() {
+            if (this._cardPollTimer) {
+                clearTimeout(this._cardPollTimer);
+                this._cardPollTimer = null;
+            }
+        },
         async startCardJob() {
             if (!this.activePeople.length) {
                 showToast('Cadastre pessoas no time primeiro.', 'warning');
                 return;
             }
-            if (!confirm('Gerar/atualizar os cards de todas as pessoas ativas? A IA analisará o histórico de cada uma.')) return;
+            if (!confirm('Gerar/atualizar os cards de todas as pessoas ativas? A IA analisará 1:1s, checkpoints e, se o Gmail estiver conectado, os e-mails de cada uma.')) return;
             try {
                 const d = await this.api('/api/cards/generate-start', { method: 'POST' });
-                this.cardJob = { running: true, jobId: d.job_id, total: d.people.length, done: 0, errors: 0, currentName: '' };
+                this.cardJob = {
+                    running: true, jobId: d.job_id, total: d.people.length, done: 0, errors: 0,
+                    currentName: '', currentEmail: '', currentStep: 'Preparando atualização…',
+                    stepKey: '', stepDetail: '', stepsDone: []
+                };
+                this.startCardProgressPoll();
                 for (const person of d.people) {
                     this.cardJob.currentName = person.full_name;
+                    this.cardJob.currentEmail = person.email || '';
+                    this.cardJob.stepKey = 'sessions';
+                    this.cardJob.currentStep = 'Avaliando registros de 1:1s e checkpoints';
+                    this.cardJob.stepDetail = '';
+                    this.cardJob.stepsDone = [];
                     try {
                         const r = await this.api('/api/cards/person/' + person.id, {
                             method: 'POST', body: JSON.stringify({ job_id: d.job_id })
                         });
-                        // cards aparecem incrementalmente
                         this.cards[person.id] = r.card;
                     } catch (e) {
                         this.cardJob.errors++;
@@ -673,8 +752,11 @@ function cortexApp() {
             } catch (e) {
                 showToast(e.message, 'error');
             } finally {
+                this.stopCardProgressPoll();
                 this.cardJob.running = false;
                 this.cardJob.currentName = '';
+                this.cardJob.stepKey = '';
+                this.cardJob.stepDetail = '';
             }
         },
         async regenCard(pid) {

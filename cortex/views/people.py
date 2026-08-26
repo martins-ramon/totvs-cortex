@@ -44,6 +44,15 @@ def _parse_optional_date(value):
         raise ValueError("Data inválida (use YYYY-MM-DD).")
 
 
+def _normalize_email(value):
+    v = (value or "").strip().lower()
+    if not v:
+        return None
+    if "@" not in v or " " in v:
+        raise ValueError("E-mail inválido.")
+    return v
+
+
 @bp.route('/people', methods=['GET'])
 @login_required
 def api_list_people():
@@ -66,6 +75,7 @@ def api_create_person():
         return jsonify({"error": "Nome é obrigatório"}), 400
     try:
         hired_at = _parse_optional_date(data.get('hired_at'))
+        email = _normalize_email(data.get('email'))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -78,7 +88,7 @@ def api_create_person():
         """), {
             "name": full_name,
             "pref": (data.get('preferred_name') or '').strip() or None,
-            "email": (data.get('email') or '').strip() or None,
+            "email": email,
             "role": (data.get('role_title') or '').strip() or None,
             "hired": hired_at,
             "notes": data.get('notes') or None,
@@ -116,12 +126,18 @@ def api_update_person(person_id):
 
     field_map = {
         'full_name': 'full_name', 'preferred_name': 'preferred_name',
-        'email': 'email', 'role_title': 'role_title', 'notes': 'notes',
+        'role_title': 'role_title', 'notes': 'notes',
     }
     for key, col in field_map.items():
         if key in data:
             updates.append(f"{col} = :{key}")
             params[key] = (data[key] or '').strip() or None
+    if 'email' in data:
+        try:
+            updates.append("email = :email")
+            params["email"] = _normalize_email(data.get('email'))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
     if 'active' in data:
         updates.append("active = :active")
         params["active"] = bool(data['active'])
