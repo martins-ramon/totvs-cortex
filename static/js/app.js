@@ -608,31 +608,37 @@ function cortexApp() {
                 this.prepLoading = false;
             }
         },
+        _dropPrepCommitment(id) {
+            if (!this.prep || !this.prep.commitments) return;
+            this.prep.commitments = this.prep.commitments.filter(x => x.id !== id);
+            if (this.prep.stats) {
+                this.prep.stats.open_count = this.prep.commitments.length;
+                this.prep.stats.overdue_count = this.prep.commitments.filter(x => x.is_overdue).length;
+            }
+        },
         async setCommitmentStatus(c, status) {
+            const prev = c.status;
+            c.status = status;
             try {
                 await this.api('/api/commitments/' + c.id, {
                     method: 'PUT', body: JSON.stringify({ status })
                 });
-                c.status = status;
-                if (status !== 'open') {
-                    this.personCommitments = await this.reloadCommitmentsSafe();
-                }
+                if (status !== 'open') this._dropPrepCommitment(c.id);
             } catch (e) {
+                c.status = prev;
                 showToast(e.message, 'error');
             }
-        },
-        async reloadCommitmentsSafe() {
-            if (!this.currentPerson) return this.personCommitments;
-            const d = await this.api('/api/people/' + this.currentPerson.id + '/commitments');
-            return d.commitments;
         },
         async completeFromPrep(c) {
             try {
                 await this.api('/api/commitments/' + c.id, {
                     method: 'PUT', body: JSON.stringify({ status: 'done' })
                 });
+                c.status = 'done';
+                this._dropPrepCommitment(c.id);
+                const local = this.personCommitments.find(x => x.id === c.id);
+                if (local) local.status = 'done';
                 showToast('Combinado concluído! ✓', 'success');
-                this.loadPrep();
             } catch (e) {
                 showToast(e.message, 'error');
             }
@@ -779,18 +785,6 @@ function cortexApp() {
                 });
                 this.cards[pid] = r.card;
                 showToast('Card atualizado!', 'success');
-            } catch (e) {
-                showToast(e.message, 'error');
-            }
-        },
-
-        async completeFromPrep(c) {
-            try {
-                await this.api('/api/commitments/' + c.id, {
-                    method: 'PUT', body: JSON.stringify({ status: 'done' })
-                });
-                showToast('Combinado concluído! ✓', 'success');
-                this.loadPrep();
             } catch (e) {
                 showToast(e.message, 'error');
             }
