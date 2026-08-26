@@ -525,7 +525,7 @@
 
                             <div class="member-card-foot">
                                 <small class="form-hint">
-                                    <span x-text="fmtDate(cards[pid].generated_at.slice(0,10))"></span>
+                                    <span x-text="'Atualizado em ' + fmtDateTime(cards[pid].generated_at)"></span>
                                     <span x-show="cards[pid].stale"> · desatualizado</span>
                                 </small>
                                 <button class="btn-small btn-view" @click="regenCard(pid)" :disabled="cardJob.running">↻</button>

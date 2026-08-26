@@ -349,6 +349,15 @@ function cortexApp() {
             const d = new Date(iso + (iso.length === 10 ? 'T12:00:00' : ''));
             return d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' });
         },
+        fmtDateTime(iso) {
+            if (!iso) return '—';
+            const d = new Date(iso);
+            if (Number.isNaN(d.getTime())) return '—';
+            return d.toLocaleString('pt-BR', {
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            });
+        },
         daysSince(iso) {
             if (!iso) return null;
             return Math.floor((Date.now() - new Date(iso + 'T12:00:00')) / 86400000);
