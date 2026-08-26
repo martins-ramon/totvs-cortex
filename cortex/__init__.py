@@ -37,6 +37,12 @@ def create_app():
     def login_page():
         return serve_static('login.html')
 
+    @app.route('/connections')
+    def connections_page():
+        # Página-destino do callback OAuth das integrações (ex.: Gmail).
+        # O JS da SPA lê os query params (?connected=.../?error=...) e abre a view.
+        return serve_static('index.html')
+
     def serve_static(filename):
         return send_from_directory(_STATIC_DIR, filename)
 

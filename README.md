@@ -29,10 +29,12 @@ Produção (Replit): `gunicorn app:app --bind 0.0.0.0:5000 --workers 4 --timeout
 | `OPENAI_API_KEY` | Geração de resumos/insights e embeddings |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Login com Google Workspace (TOTVS) |
 | `ALLOWED_EMAILS` | E-mails autorizados a logar (ex.: o seu) |
-| `ALLOWED_EMAIL_DOMAINS` | Domínios autorizados (padrão: `totvs.com`) |
+| `ALLOWED_EMAIL_DOMAINS` | Domínios autorizados (padrão: `totvs.com.br, totvs.com`) |
 | `SESSION_SECRET` | Segredo das sessões Flask (defina em produção!) |
 
-Redirect URI do Google OAuth: `https://<seu-repl>.replit.app/api/auth/google/callback`
+Redirect URIs do Google OAuth no Google Cloud Console:
+- Login: `https://<seu-repl>.replit.app/api/auth/google/callback`
+- Conexão Gmail: `https://<seu-repl>.replit.app/api/connections/gmail/callback`
 
 ### Limpeza de tabelas legadas
 
@@ -50,13 +52,13 @@ cortex/
 ├── security.py         # allowlist de e-mails + login_required
 ├── ai/                 # camada OpenAI (4 features de IA)
 ├── views/              # blueprints: auth, people, sessions,
-│                       #   checkpoints, cards
+│                       #   checkpoints, cards, connections
 └── drop_legacy.py      # limpeza idempotente das tabelas antigas
 static/                 # SPA Alpine.js (index.html + login.html)
 ```
 
 - **Startup resiliente**: falta de banco/chave OpenAI não derruba a aplicação; `/healthz` reporta `status: ok|degraded` com detalhes.
-- **Schema**: `users` (diretor) + `people`, `one_on_ones`, `commitments`, `checkpoints`, `card_jobs`, `member_cards`.
+- **Schema**: `users` (diretor) + `people`, `one_on_ones`, `commitments`, `checkpoints`, `card_jobs`, `member_cards`, `connections`.
 
 ## Roadmap
 

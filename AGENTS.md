@@ -37,5 +37,6 @@ Frontend: `static/` Alpine.js SPA with no build step (CDN). `/` serves `index.ht
 - Date parsing in PUT endpoints must happen inside try/except ValueError → return 400 (three bugs of this class were fixed already).
 - Alpine's `x-show` removes the inline display property when showing an element — never rely on inline `style="display:flex"` for modals; use `.modal.open { display:flex }` CSS + `:class="{open: state}"` instead.
 - Google OAuth: login usa `/api/auth/google/callback`; conexão Gmail usa `/api/connections/gmail/callback` (ambos precisam estar nas Authorized redirect URIs do Google Cloud). Credenciais lidas em runtime via `_google_creds()` (testável).
+- Views da SPA são client-side (`view==='...'` no Alpine), NÃO rotas Flask. Qualquer URL que o backend usa como destino de redirect (ex.: `/connections?connected=...` pós-OAuth) precisa de uma rota explícita em `cortex/__init__.py` servindo `index.html`, senão 404.
 - All UI text and AI-generated content is Brazilian Portuguese (pt-BR).
 - `attached_assets/` contains Replit-agent prompt dumps; ignore it.
