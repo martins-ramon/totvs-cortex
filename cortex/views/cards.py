@@ -28,6 +28,8 @@ _VALID_TREND = {"subindo", "estavel", "caindo"}
 _SKIP_LABELS = {
     "sem_email": "sem e-mail cadastrado",
     "gmail_nao_conectado": "Gmail não conectado",
+    "gmail_sem_permissao": "Gmail sem permissão de leitura — reconecte em Conexões",
+    "gmail_bloqueado": "Gmail bloqueado pelo domínio ou API desabilitada",
     "erro": "falha ao ler a caixa de entrada",
 }
 
@@ -330,7 +332,7 @@ def generate_person_card(person_id):
             "steps_done": ["sessions"],
         })
 
-        email_scan = gmail_svc.scan_person_inbox(db, user_id, email)
+        email_scan = gmail_svc.scan_person_inbox(db, user_id, email, job_id=job_id)
         if email_scan.get("skipped"):
             email_detail = _SKIP_LABELS.get(email_scan["skipped"], email_scan["skipped"])
         else:

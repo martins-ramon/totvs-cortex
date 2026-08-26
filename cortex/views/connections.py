@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from ..database import session_factory
 from ..security import login_required
+from .. import gmail as gmail_svc
 
 bp = Blueprint("connections", __name__, url_prefix="/api")
 
@@ -27,13 +28,10 @@ def _google_creds():
     return (os.environ.get("GOOGLE_CLIENT_ID"),
             os.environ.get("GOOGLE_CLIENT_SECRET"))
 
-# Menor privilégio: apenas leitura.
-GMAIL_SCOPES = [
-    "openid",
-    "email",
-    "profile",
-    "https://www.googleapis.com/auth/gmail.readonly",
-]
+# Só leitura da caixa. Não misturar com openid do login — senão o Google
+# devolve um token incremental sem gmail.readonly (403 em threads.list).
+GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_SCOPES = [GMAIL_READONLY]
 
 TOOLS = [
     {
@@ -126,7 +124,6 @@ def connect_start(tool_id):
             "response_type": "code",
             "access_type": "offline",
             "prompt": "consent",
-            "include_granted_scopes": "true",
             "redirect_uri": _redirect_uri(),
             "state": session['conn_state'],
             "login_hint": user_email[0] if user_email else None,
@@ -168,15 +165,25 @@ def gmail_callback():
     if not access_token:
         return redirect('/connections?error=token_exchange_failed')
 
-    # Confirma na hora que funciona: perfil da caixa de entrada.
+    granted = (tokens.get('scope') or '')
+    if granted and GMAIL_READONLY not in granted.split():
+        return redirect('/connections?error=gmail_scope')
+
     profile = {}
     try:
-        profile = requests.get(GMAIL_PROFILE_URL, headers={
+        prof = requests.get(GMAIL_PROFILE_URL, headers={
             "Authorization": f"Bearer {access_token}"
-        }).json()
-    except Exception:
-        pass
+        }, timeout=15)
+        if prof.status_code != 200:
+            print(f"Gmail profile HTTP {prof.status_code}: {prof.text[:300]}")
+            return redirect('/connections?error=gmail_forbidden')
+        profile = prof.json() or {}
+    except Exception as e:
+        print(f"Gmail profile falhou: {e}")
+        return redirect('/connections?error=gmail_forbidden')
     account_email = profile.get('emailAddress') or ''
+    if not account_email:
+        return redirect('/connections?error=gmail_forbidden')
 
     expires_in = tokens.get('expires_in', 3600)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
@@ -207,6 +214,7 @@ def gmail_callback():
             "exp": expires_at,
         })
         db.commit()
+        gmail_svc.clear_auth_skip(session['user_id'])
     finally:
         db.close()
 
@@ -238,6 +246,7 @@ def disconnect(tool_id):
             DELETE FROM connections WHERE user_id = :uid AND tool = 'gmail'
         """), {"uid": session['user_id']})
         db.commit()
+        gmail_svc.clear_auth_skip(session['user_id'])
         return jsonify({"success": True})
     finally:
         db.close()

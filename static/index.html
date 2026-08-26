@@ -539,8 +539,13 @@
                                         <button class="btn-link" style="color:#EF4444;" @click="disconnectTool(tool)">Desconectar</button>
                                     </div>
                                 </template>
-                                <!-- disponível, não conectado -->
-                                <template x-if="tool.available && tool.status !== 'connected'">
+                                <template x-if="tool.available && tool.status === 'needs_reauth'">
+                                    <div>
+                                        <p class="form-hint" style="margin-bottom:0.6rem;">Permissão de leitura ausente. Reconecte e aceite “Ver seus e-mails”.</p>
+                                        <button class="btn-primary btn-inline" @click="connectTool(tool)">Reconectar Gmail</button>
+                                    </div>
+                                </template>
+                                <template x-if="tool.available && tool.status !== 'connected' && tool.status !== 'needs_reauth'">
                                     <button class="btn-primary btn-inline" @click="connectTool(tool)">
                                         <span x-text="'Conectar ' + tool.name"></span>
                                     </button>
@@ -556,7 +561,7 @@
 
                 <p class="form-hint" style="margin-top:1.25rem;">
                     O acesso ao Gmail é somente para leitura — o Cortex nunca envia ou apaga e-mails.
-                    Com o e-mail de cada liderado cadastrado, as threads em que ele participa alimentam o card.
+                    Na autorização, aceite “Ver seus e-mails”. Se os cards falharem com 403, desconecte e conecte de novo.
                     Você pode desconectar quando quiser.
                 </p>
             </section>

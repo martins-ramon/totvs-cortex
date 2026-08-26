@@ -82,7 +82,9 @@ function cortexApp() {
             } else if (q.get('error')) {
                 const msgs = {
                     'gmail_denied': 'Autorização do Gmail negada. Você pode tentar novamente quando quiser.',
-                    'invalid_state': 'Sessão de conexão expirada. Tente conectar novamente.'
+                    'invalid_state': 'Sessão de conexão expirada. Tente conectar novamente.',
+                    'gmail_scope': 'O Google não concedeu a leitura da caixa de entrada. Conecte de novo e aceite “Ver seus e-mails”.',
+                    'gmail_forbidden': 'O Gmail recusou o acesso. Reconecte aceitando a permissão de leitura, ou verifique se a Gmail API está habilitada no projeto Google Cloud.'
                 };
                 showToast(msgs[q.get('error')] || 'Falha na conexão.', 'error');
                 this.view = 'connections';
@@ -679,6 +681,8 @@ function cortexApp() {
             const map = {
                 sem_email: '✉️ Inbox não analisada — cadastre o e-mail da pessoa.',
                 gmail_nao_conectado: '✉️ Inbox não analisada — conecte o Gmail em Conexões.',
+                gmail_sem_permissao: '✉️ Inbox não analisada — reconecte o Gmail e aceite a leitura da caixa.',
+                gmail_bloqueado: '✉️ Inbox não analisada — Gmail bloqueado pelo domínio ou API desabilitada.',
                 erro: '✉️ Inbox não analisada — falha ao ler a caixa de entrada.'
             };
             return map[code] || '';

@@ -13,11 +13,16 @@ import requests
 from sqlalchemy import text
 
 GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
-
+TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 GMAIL_THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads"
+GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+
 _MAX_THREADS = 10
 _BODY_LIMIT = 900
 _NEWER_THAN = "90d"
+
+# Evita repetir threads.list 403 para cada pessoa do mesmo job/processo.
+_AUTH_SKIP = {}
 
 
 def _aware(dt):
@@ -72,6 +77,54 @@ def _walk_body(payload):
     return ""
 
 
+def _parse_google_error(resp):
+    try:
+        body = resp.json() or {}
+    except Exception:
+        return "", (resp.text or "")[:300]
+    err = body.get("error") or {}
+    if isinstance(err, str):
+        return err, err
+    reason = ""
+    for item in err.get("errors") or []:
+        reason = item.get("reason") or reason
+    for item in err.get("details") or []:
+        reason = item.get("reason") or reason
+    reason = reason or err.get("status") or ""
+    message = err.get("message") or (resp.text or "")[:300]
+    return reason, message
+
+
+def _skip_for_google_error(status_code, reason):
+    reason = (reason or "").lower()
+    if status_code == 401 or reason in ("autherror", "unauthorized"):
+        return "gmail_sem_permissao"
+    if reason in (
+        "insufficientpermissions",
+        "access_token_scope_insufficient",
+        "forbidden",
+    ):
+        return "gmail_sem_permissao"
+    if reason in ("domainpolicy", "service_disabled", "accessnotconfigured"):
+        return "gmail_bloqueado"
+    if status_code == 403:
+        return "gmail_sem_permissao"
+    return "erro"
+
+
+def token_has_gmail_scope(access_token):
+    if not access_token:
+        return False
+    try:
+        r = requests.get(TOKENINFO_URL, params={"access_token": access_token}, timeout=10)
+        data = r.json() if r.ok else {}
+        scopes = (data.get("scope") or "").split()
+        return GMAIL_READONLY in scopes or "https://mail.google.com/" in scopes
+    except Exception as e:
+        print(f"Gmail: falha no tokeninfo: {e}")
+        return True
+
+
 def _refresh_access_token(refresh_token):
     client_id = os.environ.get("GOOGLE_CLIENT_ID")
     client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
@@ -94,28 +147,43 @@ def _refresh_access_token(refresh_token):
         print(f"Gmail: refresh sem access_token: {data.get('error')}")
         return None
     expires_in = int(data.get("expires_in") or 3600)
-    return token, datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    return token, datetime.now(timezone.utc) + timedelta(seconds=expires_in), data.get("scope")
 
 
-def get_access_token(db, user_id):
+def _mark_needs_reauth(db, user_id):
+    try:
+        db.execute(text("""
+            UPDATE connections SET status = 'needs_reauth', updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = :uid AND tool = 'gmail'
+        """), {"uid": user_id})
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"Gmail: falha ao marcar needs_reauth: {e}")
+
+
+def get_access_token(db, user_id, force_refresh=False):
     """Devolve access_token válido ou None se Gmail não estiver conectado."""
     row = db.execute(text("""
-        SELECT access_token, refresh_token, expires_at
+        SELECT access_token, refresh_token, expires_at, status
         FROM connections
-        WHERE user_id = :uid AND tool = 'gmail' AND status = 'connected'
+        WHERE user_id = :uid AND tool = 'gmail'
     """), {"uid": user_id}).fetchone()
     if not row:
         return None
+    access, refresh, expires_at, status = row[0], row[1], _aware(row[2]), row[3]
+    if status not in ("connected", "needs_reauth"):
+        return None
 
-    access, refresh, expires_at = row[0], row[1], _aware(row[2])
     soon = datetime.now(timezone.utc) + timedelta(seconds=90)
-    if access and expires_at and expires_at > soon:
+    fresh = access and expires_at and expires_at > soon
+    if fresh and not force_refresh:
         return access
 
     refreshed = _refresh_access_token(refresh)
     if not refreshed:
-        return access or None
-    new_access, new_exp = refreshed
+        return access if (fresh and access) else None
+    new_access, new_exp, _granted = refreshed
     db.execute(text("""
         UPDATE connections
         SET access_token = :at, expires_at = :exp, updated_at = CURRENT_TIMESTAMP
@@ -135,24 +203,23 @@ def _auth_get(url, token, params=None):
 
 
 def search_person_threads(access_token, person_email):
-    """Busca threads recentes em que o e-mail do participante aparece.
-
-    Retorna lista de dicts: subject, from, to, date, snippet, body.
-    Levanta RuntimeError em falha da API.
-    """
+    """Busca threads recentes em que o e-mail do participante aparece."""
     email = (person_email or "").strip().lower()
     if not email:
         return []
 
-    query = f"(from:{email} OR to:{email} OR cc:{email}) newer_than:{_NEWER_THAN}"
+    query = f"from:{email} OR to:{email} OR cc:{email} newer_than:{_NEWER_THAN}"
     listed = _auth_get(GMAIL_THREADS_URL, access_token, {
         "q": query,
         "maxResults": _MAX_THREADS,
     })
-    if listed.status_code == 401:
-        raise RuntimeError("token Gmail expirado")
     if listed.status_code >= 400:
-        raise RuntimeError(f"Gmail threads.list HTTP {listed.status_code}")
+        reason, message = _parse_google_error(listed)
+        print(f"Gmail threads.list HTTP {listed.status_code} ({reason}): {message}")
+        raise RuntimeError(
+            f"HTTP {listed.status_code}",
+            _skip_for_google_error(listed.status_code, reason),
+        )
 
     threads = (listed.json() or {}).get("threads") or []
     out = []
@@ -160,10 +227,7 @@ def search_person_threads(access_token, person_email):
         tid = t.get("id")
         if not tid:
             continue
-        got = _auth_get(f"{GMAIL_THREADS_URL}/{tid}", access_token, {
-            "format": "full",
-            "metadataHeaders": ["From", "To", "Cc", "Subject", "Date"],
-        })
+        got = _auth_get(f"{GMAIL_THREADS_URL}/{tid}", access_token, {"format": "full"})
         if got.status_code >= 400:
             continue
         data = got.json() or {}
@@ -188,30 +252,82 @@ def search_person_threads(access_token, person_email):
     return out
 
 
-def scan_person_inbox(db, user_id, person_email):
+def _auth_skip_key(user_id, job_id):
+    return f"{user_id}:{job_id or 'anon'}"
+
+
+def clear_auth_skip(user_id=None):
+    if user_id is None:
+        _AUTH_SKIP.clear()
+        return
+    prefix = f"{user_id}:"
+    for key in [k for k in _AUTH_SKIP if str(k).startswith(prefix)]:
+        _AUTH_SKIP.pop(key, None)
+
+
+def scan_person_inbox(db, user_id, person_email, job_id=None):
     """Resultado pronto para o card: scanned/skipped + threads.
 
-    Nunca levanta: erros viram skipped='erro'.
+    Nunca levanta: erros viram skipped.
     """
     email = (person_email or "").strip().lower()
     if not email:
         return {"scanned": False, "skipped": "sem_email", "threads": [], "thread_count": 0}
 
+    cache_key = _auth_skip_key(user_id, job_id)
+    cached = _AUTH_SKIP.get(cache_key)
+    if cached:
+        return {"scanned": False, "skipped": cached, "threads": [], "thread_count": 0}
+
+    def _fail(skipped):
+        if skipped in ("gmail_sem_permissao", "gmail_bloqueado", "gmail_nao_conectado"):
+            _AUTH_SKIP[cache_key] = skipped
+        return {"scanned": False, "skipped": skipped, "threads": [], "thread_count": 0}
+
     try:
         token = get_access_token(db, user_id)
     except Exception as e:
         print(f"Gmail: erro ao obter token: {e}")
-        return {"scanned": False, "skipped": "erro", "threads": [], "thread_count": 0}
+        return _fail("erro")
 
     if not token:
-        return {"scanned": False, "skipped": "gmail_nao_conectado", "threads": [], "thread_count": 0}
+        return _fail("gmail_nao_conectado")
+
+    if not token_has_gmail_scope(token):
+        token = get_access_token(db, user_id, force_refresh=True) or token
+        if not token_has_gmail_scope(token):
+            print("Gmail: token sem escopo gmail.readonly — reconecte em Conexões.")
+            _mark_needs_reauth(db, user_id)
+            return _fail("gmail_sem_permissao")
 
     try:
         threads = search_person_threads(token, email)
+    except RuntimeError as e:
+        skipped = e.args[1] if len(e.args) > 1 else "erro"
+        if skipped in ("gmail_sem_permissao", "erro"):
+            retry = get_access_token(db, user_id, force_refresh=True)
+            if retry and retry != token:
+                try:
+                    threads = search_person_threads(retry, email)
+                except RuntimeError as e2:
+                    skipped = e2.args[1] if len(e2.args) > 1 else skipped
+                    if skipped == "gmail_sem_permissao":
+                        _mark_needs_reauth(db, user_id)
+                    return _fail(skipped)
+                except Exception as e2:
+                    print(f"Gmail: falha no retry de {email}: {e2}")
+                    return _fail("erro")
+            else:
+                if skipped == "gmail_sem_permissao":
+                    _mark_needs_reauth(db, user_id)
+                return _fail(skipped)
+        else:
+            return _fail(skipped)
     except Exception as e:
         print(f"Gmail: falha ao buscar threads de {email}: {e}")
-        return {"scanned": False, "skipped": "erro", "threads": [], "thread_count": 0}
+        return _fail("erro")
 
+    _AUTH_SKIP.pop(cache_key, None)
     return {
         "scanned": True,
         "skipped": None,
