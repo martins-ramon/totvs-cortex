@@ -99,12 +99,43 @@ CONTEÚDO DO FEEDZ:
     return json.loads(response.choices[0].message.content)
 
 
+def extract_email_insights(person_name: str, email_context: str):
+    """Extrai pendências, to-dos e assuntos em andamento das threads de e-mail."""
+    prompt = f"""Você é um assistente de gestão. Abaixo estão threads de e-mail em que
+**{person_name}** participa. Extraia o que ainda está em andamento, em JSON válido,
+em português do Brasil:
+
+{{
+  "pendencias": ["itens aguardando resposta, decisão ou desbloqueio"],
+  "todos": ["ações concretas mencionadas, ainda em aberto"],
+  "assuntos": ["temas/projetos importantes em curso nas threads"]
+}}
+
+Regras:
+- Só use o que estiver nas threads. Não invente.
+- Prefira listas vazias a conjecturas.
+- Seja específico (cite o assunto da thread quando ajudar).
+- Máximo 8 itens por lista.
+
+THREADS:
+{email_context}"""
+
+    response = get_client().chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+    )
+    return json.loads(response.choices[0].message.content)
+
+
 def generate_prep_agenda(person_name: str, prep_context: str):
     """Gera a agenda sugerida para o próximo 1:1 com base no contexto consolidado."""
     prompt = f"""Você é um coach executivo de elite ajudando um diretor a preparar o próximo 1:1
 com **{person_name}**. Com base no contexto consolidado abaixo (histórico de conversas,
-combinados em aberto, pontos de atenção e desenvolvimento), gere uma AGENDA PRÁTICA para a reunião,
-em português do Brasil, usando markdown simples (## seções, listas com -, **negrito**).
+combinados em aberto, e-mails em andamento, pontos de atenção e desenvolvimento), gere uma
+AGENDA PRÁTICA para a reunião, em português do Brasil, usando markdown simples
+(## seções, listas com -, **negrito**).
 
 Estrutura obrigatória:
 ## Check-in (5 min)
@@ -113,8 +144,12 @@ Estrutura obrigatória:
 ## Follow-up de Combinados (10 min)
 - Liste os pendentes mais críticos (marque vencidos com ⚠️)
 
+## Inbox e pendências de e-mail (5-10 min)
+- Pendências, to-dos e assuntos em andamento nas threads recentes
+- Se não houver e-mails no contexto, omita esta seção
+
 ## Temas para a Conversa (20 min)
-- Tópicos priorizados a partir do histórico recente (atenção + desenvolvimento), com o porquê de cada um
+- Tópicos priorizados a partir do histórico recente (atenção + desenvolvimento + inbox), com o porquê de cada um
 
 ## Reconhecimento (5 min)
 - Conquistas recentes específicas a celebrar

@@ -357,10 +357,13 @@ function cortexApp() {
             const p = this.people.find(x => String(x.id) === String(pid));
             return p ? p.full_name : '(pessoa removida)';
         },
-        ownerLabel(owner) {
+        ownerLabel(owner, person) {
             if (owner === 'manager') return 'Você (gestor)';
             if (owner === 'person') {
-                return this.currentPerson ? (this.currentPerson.preferred_name || this.currentPerson.full_name) : 'Liderado';
+                const p = person
+                    || (this.view === 'prep' && this.prep && this.prep.person)
+                    || this.currentPerson;
+                return p ? (p.preferred_name || p.full_name) : 'Liderado';
             }
             return owner;
         },
@@ -670,6 +673,11 @@ function cortexApp() {
         },
         cardHasEmailInsights(card) {
             const e = card && card.card_json && card.card_json.emails;
+            if (!e) return false;
+            return (e.pendencias || []).length + (e.todos || []).length + (e.assuntos || []).length > 0;
+        },
+        prepHasEmailInsights() {
+            const e = this.prep && this.prep.emails;
             if (!e) return false;
             return (e.pendencias || []).length + (e.todos || []).length + (e.assuntos || []).length > 0;
         },

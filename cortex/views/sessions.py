@@ -2,11 +2,12 @@
 import json
 from datetime import date
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
 from sqlalchemy import text
 
 from ..database import session_factory
 from .. import ai
+from .. import gmail as gmail_svc
 from ..security import login_required
 
 bp = Blueprint("sessions", __name__, url_prefix="/api")
@@ -480,7 +481,98 @@ def _collect_prep_data(db, person_row):
         "commitments": commitments,
         "recent_sessions": sessions,
         "last_checkpoint": checkpoint,
+        "emails": {"scanned": False, "skipped": None, "thread_count": 0,
+                   "pendencias": [], "todos": [], "assuntos": []},
     }
+
+
+def _str_list(v, limit=10):
+    return [str(x).strip() for x in v if str(x).strip()][:limit] if isinstance(v, list) else []
+
+
+def _format_email_threads(person_email, threads):
+    lines = [f"E-MAILS ENVOLVENDO {person_email} "
+             f"(últimos 90 dias, {len(threads)} thread(s)):"]
+    for t in threads:
+        lines.append(
+            f"- {t.get('date') or '?'} | {t.get('subject') or '(sem assunto)'} "
+            f"| de: {t.get('from') or '?'}"
+        )
+        snippet = t.get('snippet') or ''
+        if snippet:
+            lines.append(f"  Resumo: {snippet[:280]}")
+        body = t.get('body') or ''
+        if body and body != snippet:
+            lines.append(f"  Trecho: {body[:700]}")
+    return "\n".join(lines)
+
+
+def _latest_card_emails(db, person_id):
+    row = db.execute(text("""
+        SELECT card_json FROM member_cards
+        WHERE person_id = :pid
+        ORDER BY generated_at DESC LIMIT 1
+    """), {"pid": person_id}).fetchone()
+    if not row:
+        return None
+    cj = row[0] if isinstance(row[0], dict) else {}
+    emails = cj.get("emails") if isinstance(cj, dict) else None
+    if not isinstance(emails, dict) or not emails.get("scanned"):
+        return None
+    if not (emails.get("pendencias") or emails.get("todos") or emails.get("assuntos")):
+        return None
+    return {
+        "scanned": True,
+        "skipped": None,
+        "source": "card",
+        "thread_count": int(emails.get("thread_count") or 0),
+        "pendencias": _str_list(emails.get("pendencias")),
+        "todos": _str_list(emails.get("todos")),
+        "assuntos": _str_list(emails.get("assuntos")),
+    }
+
+
+def _collect_email_insights(db, user_id, person):
+    empty = {
+        "scanned": False, "skipped": None, "source": None, "thread_count": 0,
+        "pendencias": [], "todos": [], "assuntos": [],
+    }
+    email = person.get("email")
+    name = person.get("full_name") or ""
+    pid = person.get("id")
+
+    scan = gmail_svc.scan_person_inbox(db, user_id, email)
+    if scan.get("skipped"):
+        fallback = _latest_card_emails(db, pid)
+        if fallback:
+            fallback["skipped"] = None
+            return fallback
+        empty["skipped"] = scan["skipped"]
+        return empty
+
+    threads = scan.get("threads") or []
+    empty["scanned"] = True
+    empty["source"] = "live"
+    empty["thread_count"] = int(scan.get("thread_count") or 0)
+    if not threads:
+        return empty
+
+    try:
+        raw = ai.extract_email_insights(name, _format_email_threads(email, threads))
+    except Exception as e:
+        print(f"Prep: falha ao extrair insights de e-mail de {email}: {e}")
+        raw = {}
+        empty["assuntos"] = _str_list(
+            [t.get("subject") for t in threads if t.get("subject")]
+        )
+        return empty
+
+    if not isinstance(raw, dict):
+        raw = {}
+    empty["pendencias"] = _str_list(raw.get("pendencias"))
+    empty["todos"] = _str_list(raw.get("todos"))
+    empty["assuntos"] = _str_list(raw.get("assuntos"))
+    return empty
 
 
 _PERSON_FOR_PREP = """
@@ -498,7 +590,9 @@ def person_prep(person_id):
         person = db.execute(text(_PERSON_FOR_PREP), {"pid": person_id}).fetchone()
         if not person:
             return jsonify({"error": "Pessoa não encontrada"}), 404
-        return jsonify(_collect_prep_data(db, person))
+        prep = _collect_prep_data(db, person)
+        prep["emails"] = _collect_email_insights(db, session.get("user_id"), prep["person"])
+        return jsonify(prep)
     finally:
         db.close()
 
@@ -513,6 +607,7 @@ def person_agenda(person_id):
             return jsonify({"error": "Pessoa não encontrada"}), 404
 
         prep = _collect_prep_data(db, person)
+        prep["emails"] = _collect_email_insights(db, session.get("user_id"), prep["person"])
     finally:
         db.close()
 
@@ -554,6 +649,19 @@ def person_agenda(person_id):
             lines.append(f"- Ação: {a.get('acao') or a.get('action')} — Responsável: {who}")
         if cp['public_notes']:
             lines.append(f"Notas públicas: {cp['public_notes']}")
+
+    em = prep.get('emails') or {}
+    if em.get('pendencias') or em.get('todos') or em.get('assuntos'):
+        n = em.get('thread_count') or 0
+        lines.append(f"\nE-MAILS EM ANDAMENTO ({n} thread(s) recentes):")
+        for item in em.get('pendencias') or []:
+            lines.append(f"- Pendência: {item}")
+        for item in em.get('todos') or []:
+            lines.append(f"- To-do: {item}")
+        for item in em.get('assuntos') or []:
+            lines.append(f"- Assunto: {item}")
+    elif em.get('skipped'):
+        lines.append(f"\nE-mails: não analisados ({em['skipped']}).")
 
     agenda_md = ai.generate_prep_agenda(prep['person']['full_name'], "\n".join(lines))
     return jsonify({"agenda_md": agenda_md})

@@ -299,7 +299,7 @@
             <section x-show="view==='prep'">
                 <div class="view-header">
                     <h2>Preparar próximo 1:1</h2>
-                    <p>Histórico consolidado, combinados pendentes e agenda sugerida pela IA.</p>
+                    <p>Histórico consolidado, combinados, inbox e agenda sugerida pela IA.</p>
                 </div>
 
                 <div class="form-group" style="max-width:420px;">
@@ -312,7 +312,7 @@
                     </select>
                 </div>
 
-                <template x-if="prepLoading"><div class="loading">Consolidando histórico…</div></template>
+                <template x-if="prepLoading"><div class="loading">Consolidando histórico e e-mails…</div></template>
 
                 <template x-if="prep && !prepLoading">
                     <div>
@@ -352,7 +352,7 @@
                                         <div class="grow">
                                             <span x-text="cst.description"></span>
                                             <div class="form-hint">
-                                                <strong x-text="ownerLabel(cst.owner)"></strong><span x-show="cst.due_date" x-text="' · ' + fmtDate(cst.due_date)"></span>
+                                                <strong x-text="ownerLabel(cst.owner, prep.person)"></strong><span x-show="cst.due_date" x-text="' · ' + fmtDate(cst.due_date)"></span>
                                                 <span class="badge-overdue" x-show="cst.is_overdue">⚠️ vencido</span>
                                             </div>
                                         </div>
@@ -379,6 +379,32 @@
                                     </div>
                                 </template>
                             </div>
+                        </div>
+
+                        <div class="panel prep-inbox" style="margin-top:1.25rem;">
+                            <h4>✉️ Inbox em andamento</h4>
+                            <template x-if="prepHasEmailInsights()">
+                                <div class="email-insights" style="background:transparent;border:0;padding:0;">
+                                    <p class="form-hint" x-show="prep.emails.thread_count"
+                                       x-text="(prep.emails.thread_count || 0) + ' thread(s) recentes envolvendo ' + (prep.person.email || 'este e-mail')"></p>
+                                    <ul>
+                                        <template x-for="(x,i) in (prep.emails.pendencias || [])" :key="'pp'+i">
+                                            <li><span class="email-tag">Pendência</span> <span x-text="x"></span></li>
+                                        </template>
+                                        <template x-for="(x,i) in (prep.emails.todos || [])" :key="'pt'+i">
+                                            <li><span class="email-tag todo">To-do</span> <span x-text="x"></span></li>
+                                        </template>
+                                        <template x-for="(x,i) in (prep.emails.assuntos || [])" :key="'pa'+i">
+                                            <li><span class="email-tag topic">Assunto</span> <span x-text="x"></span></li>
+                                        </template>
+                                    </ul>
+                                </div>
+                            </template>
+                            <p class="form-hint" x-show="!prepHasEmailInsights() && prep.emails && prep.emails.skipped"
+                               x-text="emailSkipLabel(prep.emails.skipped)"></p>
+                            <p class="form-hint" x-show="!prepHasEmailInsights() && prep.emails && !prep.emails.skipped">
+                                Nenhuma pendência de e-mail identificada nas threads recentes.
+                            </p>
                         </div>
                     </div>
                 </template>
