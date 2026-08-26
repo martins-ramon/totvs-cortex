@@ -50,6 +50,9 @@ function cortexApp() {
         cardsLoaded: false,
         cardJob: { running: false, jobId: null, total: 0, done: 0, errors: 0, currentName: '' },
 
+        connections: [],
+        connectionsLoading: false,
+
         // --- inicialização ---
         async init() {
             try {
@@ -60,6 +63,22 @@ function cortexApp() {
             } catch (e) {
                 window.location.href = '/login';
                 return;
+            }
+            // Mensagens de retorno das conexões (OAuth redirect)
+            const q = new URLSearchParams(window.location.search);
+            if (q.get('connected') === 'gmail') {
+                showToast('Gmail conectado com sucesso! ✓', 'success');
+                this.view = 'connections';
+            } else if (q.get('error')) {
+                const msgs = {
+                    'gmail_denied': 'Autorização do Gmail negada. Você pode tentar novamente quando quiser.',
+                    'invalid_state': 'Sessão de conexão expirada. Tente conectar novamente.'
+                };
+                showToast(msgs[q.get('error')] || 'Falha na conexão.', 'error');
+                this.view = 'connections';
+            }
+            if (q.get('connected') || q.get('error')) {
+                history.replaceState({}, '', window.location.pathname);
             }
             await this.loadPeople();
             this.loadRecentSessions();
@@ -681,7 +700,48 @@ function cortexApp() {
             } catch (e) {
                 showToast(e.message, 'error');
             }
-        }
+        },
+
+        // --- conexões ---
+        async goConnections() {
+            this.view = 'connections';
+            this.connectionsLoading = true;
+            try {
+                const d = await this.api('/api/connections');
+                this.connections = d.connections;
+            } catch (e) {
+                showToast(e.message, 'error');
+            } finally {
+                this.connectionsLoading = false;
+            }
+        },
+        async connectTool(tool) {
+            try {
+                const d = await this.api(`/api/connections/${tool.id}/start`);
+                window.location.href = d.redirect_url;
+            } catch (e) {
+                showToast(e.message, 'error');
+            }
+        },
+        async disconnectTool(tool) {
+            if (!confirm(`Desconectar o ${tool.name}? O Cortex perderá o acesso a ele.`)) return;
+            try {
+                await this.api(`/api/connections/${tool.id}/disconnect`, { method: 'POST' });
+                showToast(`${tool.name} desconectado.`, 'success');
+                await this.loadConnections();
+            } catch (e) {
+                showToast(e.message, 'error');
+            }
+        },
+        async loadConnections() {
+            try {
+                const d = await this.api('/api/connections');
+                this.connections = d.connections;
+            } catch (e) {
+                showToast(e.message, 'error');
+            }
+        },
+
     };
 }
 

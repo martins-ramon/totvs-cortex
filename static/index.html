@@ -40,8 +40,8 @@
                 <a href="#" class="nav-item" :class="{active: view==='cards'}" @click.prevent="goCards()">
                     <span>🗂️</span> Cards do Time
                 </a>
-                <a href="#" class="nav-item nav-disabled" title="Em breve">
-                    <span>🔒</span> Automações
+                <a href="#" class="nav-item" :class="{active: view==='connections'}" @click.prevent="goConnections()">
+                    <span>🔗</span> Conexões
                 </a>
             </nav>
             <div class="sidebar-footer">
@@ -475,6 +475,57 @@
                         </div>
                     </template>
                 </div>
+            </section>
+
+            <!-- ===== CONEXÕES ===== -->
+            <section x-show="view==='connections'">
+                <div class="view-header">
+                    <h2>Conexões</h2>
+                    <p>Ferramentas que trazem o contexto do seu dia a dia para dentro do Cortex.</p>
+                </div>
+
+                <template x-if="connectionsLoading"><div class="loading">Carregando conexões…</div></template>
+
+                <div class="connections-grid" x-show="!connectionsLoading">
+                    <template x-for="tool in connections" :key="tool.id">
+                        <div class="connection-card" :class="{soon: !tool.available}">
+                            <div class="connection-icon" x-text="tool.icon"></div>
+                            <h4 x-text="tool.name"></h4>
+                            <p x-text="tool.description"></p>
+
+                            <div class="connection-action">
+                                <!-- conectado -->
+                                <template x-if="tool.available && tool.status === 'connected'">
+                                    <div class="connected-state">
+                                        <div class="connected-info">
+                                            <span class="connected-dot"></span>
+                                            <span class="grow">
+                                                <strong>Conectado</strong>
+                                                <small class="form-hint" x-show="tool.account" x-text="tool.account"></small>
+                                            </span>
+                                        </div>
+                                        <button class="btn-link" style="color:#EF4444;" @click="disconnectTool(tool)">Desconectar</button>
+                                    </div>
+                                </template>
+                                <!-- disponível, não conectado -->
+                                <template x-if="tool.available && tool.status !== 'connected'">
+                                    <button class="btn-primary btn-inline" @click="connectTool(tool)">
+                                        <span x-text="'Conectar ' + tool.name"></span>
+                                    </button>
+                                </template>
+                                <!-- em breve -->
+                                <template x-if="!tool.available">
+                                    <span class="chip chip-muted">Em breve</span>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <p class="form-hint" style="margin-top:1.25rem;">
+                    O acesso ao Gmail é somente para leitura — o Cortex nunca envia ou apaga e-mails.
+                    Você pode desconectar quando quiser.
+                </p>
             </section>
 
         </main>

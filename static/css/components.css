@@ -1044,3 +1044,19 @@ input:checked + .slider:before {
 .progress-labels { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.55rem; gap: 1rem; flex-wrap: wrap; }
 .progress-track { height: 12px; background: #E2E8F0; border-radius: 20px; overflow: hidden; }
 .progress-fill { height: 100%; background: linear-gradient(90deg, #6366F1, #8B5CF6); border-radius: 20px; transition: width 0.4s ease; }
+
+/* --- Conexões --- */
+.connections-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.25rem; }
+.connection-card { background: white; border-radius: 16px; padding: 1.6rem 1.5rem 1.4rem; box-shadow: 0 4px 14px rgba(0,0,0,0.07); display: flex; flex-direction: column; align-items: center; text-align: center; transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.connection-card:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(99,102,241,0.13); }
+.connection-card.soon { opacity: 0.55; }
+.connection-card.soon:hover { transform: none; box-shadow: 0 4px 14px rgba(0,0,0,0.07); }
+.connection-icon { width: 64px; height: 64px; border-radius: 18px; background: #EEF2FF; display: flex; align-items: center; justify-content: center; font-size: 1.9rem; margin-bottom: 0.9rem; }
+.connection-card h4 { font-size: 1.15rem; font-weight: 700; margin-bottom: 0.3rem; }
+.connection-card p { font-size: 0.88rem; color: #64748B; line-height: 1.5; flex: 1; }
+.connection-action { margin-top: 1.1rem; width: 100%; }
+.connected-state { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; width: 100%; }
+.connected-info { display: flex; align-items: center; gap: 0.55rem; min-width: 0; text-align: left; }
+.connected-info strong { font-size: 0.9rem; color: #065F46; display: block; }
+.connected-info .form-hint { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.connected-dot { width: 10px; height: 10px; border-radius: 50%; background: #10B981; box-shadow: 0 0 0 3px rgba(16,185,129,0.15); flex-shrink: 0; }

@@ -190,6 +190,22 @@ _NEW_DDL = [
     )
     """, "member_cards"),
     ("CREATE INDEX IF NOT EXISTS idx_member_cards_person ON member_cards (person_id, generated_at DESC)", "idx_member_cards_person"),
+    ("""
+    CREATE TABLE IF NOT EXISTS connections (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tool VARCHAR(40) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'connected',
+        account_email VARCHAR(255),
+        scopes TEXT,
+        access_token TEXT,
+        refresh_token TEXT,
+        expires_at TIMESTAMP WITH TIME ZONE,
+        connected_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, tool)
+    )
+    """, "connections"),
 ]
 
 # Evoluções incrementais (colunas adicionadas após a primeira versão das tabelas)
