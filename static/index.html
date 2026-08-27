@@ -22,35 +22,56 @@
     <div class="app-container" x-show="booted">
 
         <!-- ============ SIDEBAR ============ -->
-        <aside class="sidebar">
+        <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
             <div class="sidebar-header">
-                <h1>Cortex</h1>
-                <p>Copiloto de gestão 1:1</p>
+                <div class="sidebar-brand">
+                    <h1>
+                        <span class="brand-full">Cortex</span>
+                        <span class="brand-mini">C</span>
+                    </h1>
+                    <p>Copiloto de gestão 1:1</p>
+                </div>
+                <button
+                    type="button"
+                    class="sidebar-toggle"
+                    @click="toggleSidebar()"
+                    :aria-expanded="!sidebarCollapsed"
+                    :title="sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'"
+                    :aria-label="sidebarCollapsed ? 'Expandir menu' : 'Recolher menu'"
+                >
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M10 4L6 8l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
             </div>
             <nav class="sidebar-nav">
-                <a href="#" class="nav-item" :class="{active: view==='dashboard'}" @click.prevent="go('dashboard')">
-                    <span>📊</span> Início
+                <a href="#" class="nav-item" :class="{active: view==='dashboard'}" @click.prevent="go('dashboard')" title="Início">
+                    <span class="nav-icon">📊</span>
+                    <span class="nav-label">Início</span>
                 </a>
-                <a href="#" class="nav-item" :class="{active: view==='people' || view==='person'}" @click.prevent="go('people')">
-                    <span>👥</span> Meu Time
+                <a href="#" class="nav-item" :class="{active: view==='people' || view==='person'}" @click.prevent="go('people')" title="Meu Time">
+                    <span class="nav-icon">👥</span>
+                    <span class="nav-label">Meu Time</span>
                 </a>
-                <a href="#" class="nav-item" :class="{active: view==='prep'}" @click.prevent="go('prep')">
-                    <span>🧭</span> Preparar 1:1
+                <a href="#" class="nav-item" :class="{active: view==='prep'}" @click.prevent="go('prep')" title="Preparar 1:1">
+                    <span class="nav-icon">🧭</span>
+                    <span class="nav-label">Preparar 1:1</span>
                 </a>
-                <a href="#" class="nav-item" :class="{active: view==='cards'}" @click.prevent="goCards()">
-                    <span>🗂️</span> Cards do Time
+                <a href="#" class="nav-item" :class="{active: view==='cards'}" @click.prevent="goCards()" title="Cards do Time">
+                    <span class="nav-icon">🗂️</span>
+                    <span class="nav-label">Cards do Time</span>
                 </a>
-                <a href="#" class="nav-item" :class="{active: view==='connections'}" @click.prevent="goConnections()">
-                    <span>🔗</span> Conexões
+                <a href="#" class="nav-item" :class="{active: view==='connections'}" @click.prevent="goConnections()" title="Conexões">
+                    <span class="nav-icon">🔗</span>
+                    <span class="nav-label">Conexões</span>
                 </a>
             </nav>
             <div class="sidebar-footer">
                 <div class="user-info">
-                    <div class="user-avatar-placeholder" x-text="userInitials"></div>
+                    <div class="user-avatar-placeholder" x-text="userInitials" :title="user ? user.name : ''"></div>
                     <strong id="user-name-link" x-text="user ? user.name : ''"></strong>
-                    <small style="color:#94A3B8;" x-text="user ? user.email : ''"></small>
-                    <br>
-                    <button class="btn-logout" @click="logout()">Sair</button>
+                    <small class="user-email" x-text="user ? user.email : ''"></small>
+                    <button class="btn-logout" @click="logout()" title="Sair">Sair</button>
                 </div>
             </div>
         </aside>
@@ -547,7 +568,9 @@
                 <div class="connections-grid" x-show="!connectionsLoading">
                     <template x-for="tool in connections" :key="tool.id">
                         <div class="connection-card" :class="{soon: !tool.available}">
-                            <div class="connection-icon" x-text="tool.icon"></div>
+                            <div class="connection-icon">
+                                <img :src="tool.icon" :alt="tool.name">
+                            </div>
                             <h4 x-text="tool.name"></h4>
                             <p x-text="tool.description"></p>
 

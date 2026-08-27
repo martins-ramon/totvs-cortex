@@ -26,6 +26,9 @@ body {
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.1);
   position: relative; /* Necessário para o z-index funcionar corretamente */
   z-index: 1000; /* ✅ CORREÇÃO: Define a camada da sidebar */
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: width 0.25s ease;
 }
 
 .main-content {
@@ -175,11 +178,18 @@ body {
   color: #94A3B8;
 }
 
+@media (min-width: 769px) {
+  .sidebar.collapsed {
+      width: 76px;
+  }
+}
+
 @media (max-width: 768px) {
   .app-container {
       flex-direction: column;
   }
-  .sidebar {
+  .sidebar,
+  .sidebar.collapsed {
       width: 100%;
   }
 }

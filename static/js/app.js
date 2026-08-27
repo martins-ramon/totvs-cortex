@@ -6,6 +6,7 @@ function cortexApp() {
         booted: false,
         user: null,
         view: 'dashboard',
+        sidebarCollapsed: false,
 
         people: [],
         peopleFilter: 'active',
@@ -92,6 +93,7 @@ function cortexApp() {
             if (q.get('connected') || q.get('error')) {
                 history.replaceState({}, '', window.location.pathname);
             }
+            try { this.sidebarCollapsed = localStorage.getItem('cortex.sidebarCollapsed') === '1'; } catch (e) { /* ignore */ }
             await this.loadPeople();
             this.loadRecentSessions();
             this.booted = true;
@@ -124,6 +126,11 @@ function cortexApp() {
             if (view !== 'person') this.expandedId = null;
             if (view === 'people') this.loadPeople();
             if (view === 'dashboard') this.loadRecentSessions();
+        },
+
+        toggleSidebar() {
+            this.sidebarCollapsed = !this.sidebarCollapsed;
+            try { localStorage.setItem('cortex.sidebarCollapsed', this.sidebarCollapsed ? '1' : '0'); } catch (e) { /* ignore */ }
         },
 
         // --- carregamentos ---
