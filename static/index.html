@@ -16,7 +16,10 @@
 <div x-data="cortexApp()" x-init="init()" x-cloak>
 
     <template x-if="!booted">
-        <div class="loading" style="padding:4rem;">Carregando Cortex…</div>
+        <div class="loading loading-boot" role="status" aria-live="polite">
+            <span class="spinner spinner-lg" aria-hidden="true"></span>
+            <p>Carregando Cortex<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></p>
+        </div>
     </template>
 
     <div class="app-container" x-show="booted">
@@ -333,7 +336,12 @@
                     </select>
                 </div>
 
-                <template x-if="prepLoading"><div class="loading">Consolidando histórico e e-mails…</div></template>
+                <template x-if="prepLoading">
+                    <div class="loading" role="status" aria-live="polite">
+                        <span class="spinner" aria-hidden="true"></span>
+                        <p>Consolidando histórico e e-mails<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></p>
+                    </div>
+                </template>
 
                 <template x-if="prep && !prepLoading">
                     <div>
@@ -353,9 +361,9 @@
                         </div>
 
                         <div class="btn-row">
-                            <button class="btn-primary btn-inline" @click="generateAgenda()" :disabled="agendaLoading">
+                            <button class="btn-primary btn-inline" @click="generateAgenda()" :disabled="agendaLoading" :aria-busy="agendaLoading">
                                 <span x-show="!agendaLoading">✨ Gerar agenda sugerida</span>
-                                <span x-show="agendaLoading">Analisando com IA…</span>
+                                <span class="btn-busy" x-show="agendaLoading"><span class="spinner spinner-sm" aria-hidden="true"></span>Analisando com IA</span>
                             </button>
                             <button class="btn-secondary btn-inline" @click="openSessionModal(prep.person.id)">Registrar este 1:1 agora</button>
                         </div>
@@ -439,9 +447,9 @@
                         <h2>Cards do Time</h2>
                         <p>Radiografia de cada pessoa: saúde, cadência, accountability e riscos — fundamentada em Project Aristotle e accountability radical.</p>
                     </div>
-                    <button class="btn-primary btn-inline" @click="startCardJob()" :disabled="cardJob.running">
+                    <button class="btn-primary btn-inline" @click="startCardJob()" :disabled="cardJob.running" :aria-busy="cardJob.running">
                         <span x-show="!cardJob.running">🔄 Atualizar todos os cards</span>
-                        <span x-show="cardJob.running">Gerando…</span>
+                        <span class="btn-busy" x-show="cardJob.running"><span class="spinner spinner-sm" aria-hidden="true"></span>Gerando cards</span>
                     </button>
                 </div>
 
@@ -449,9 +457,12 @@
                 <template x-if="cardJob.running">
                     <div class="progress-panel">
                         <div class="progress-labels">
-                            <strong x-text="cardJob.currentName
-                                ? ('Card ' + Math.min(cardJob.done + 1, cardJob.total) + '/' + cardJob.total + ' — ' + cardJob.currentName)
-                                : 'Preparando atualização…'"></strong>
+                            <strong class="btn-busy">
+                                <span class="spinner spinner-sm" aria-hidden="true"></span>
+                                <span x-text="cardJob.currentName
+                                    ? ('Card ' + Math.min(cardJob.done + 1, cardJob.total) + '/' + cardJob.total + ' — ' + cardJob.currentName)
+                                    : 'Preparando atualização'"></span>
+                            </strong>
                             <span class="progress-pct" x-text="progressPct + '%'"></span>
                         </div>
                         <div class="progress-track">
@@ -563,7 +574,12 @@
                     <p>Ferramentas que trazem o contexto do seu dia a dia para dentro do Cortex.</p>
                 </div>
 
-                <template x-if="connectionsLoading"><div class="loading">Carregando conexões…</div></template>
+                <template x-if="connectionsLoading">
+                    <div class="loading" role="status" aria-live="polite">
+                        <span class="spinner" aria-hidden="true"></span>
+                        <p>Carregando conexões<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></p>
+                    </div>
+                </template>
 
                 <div class="connections-grid" x-show="!connectionsLoading">
                     <template x-for="tool in connections" :key="tool.id">
@@ -664,7 +680,10 @@
                 <div class="form-group"><label>Início na função</label><input class="form-control" x-model="personForm.hired_at" type="date"></div>
             </div>
             <div class="form-group"><label>Anotações</label><textarea class="form-control" rows="2" x-model="personForm.notes" placeholder="Contexto geral, área de atuação…"></textarea></div>
-            <button class="btn-primary btn-inline" @click="savePerson()">Salvar</button>
+            <button class="btn-primary btn-inline" @click="savePerson()" :disabled="savingPerson" :aria-busy="savingPerson">
+                <span x-show="!savingPerson">Salvar</span>
+                <span class="btn-busy" x-show="savingPerson"><span class="spinner spinner-sm" aria-hidden="true"></span>Salvando</span>
+            </button>
         </div>
     </div>
 
@@ -688,9 +707,9 @@
                 <textarea class="form-control mono" rows="10" x-model="sessionForm.transcript_raw" placeholder="Cole aqui a transcrição (Meet → Atividades → Transcrição). A IA extrai resumo, combinados e pontos de atenção. Se alterar uma transcrição existente, os insights serão refeitos automaticamente."></textarea>
                 <small class="form-hint">Dica: no Google Meet, abra "Atividades → Transcrição" e copie o texto completo.</small>
             </div>
-            <button class="btn-primary btn-inline" @click="saveSession()" :disabled="savingSession">
+            <button class="btn-primary btn-inline" @click="saveSession()" :disabled="savingSession" :aria-busy="savingSession">
                 <span x-show="!savingSession" x-text="editingSessionId ? 'Salvar alterações' : 'Salvar 1:1'"></span>
-                <span x-show="savingSession">Salvando…</span>
+                <span class="btn-busy" x-show="savingSession"><span class="spinner spinner-sm" aria-hidden="true"></span>Salvando</span>
             </button>
         </div>
     </div>
@@ -705,11 +724,14 @@
                     <p class="form-hint" x-text="'Pessoa: ' + personName(sessionDetail.person_id)"></p>
 
                     <div class="btn-row">
-                        <button class="btn-ai-action" @click="extractSession()" :disabled="extracting">
+                        <button class="btn-ai-action" @click="extractSession()" :disabled="extracting" :aria-busy="extracting">
                             <span x-show="!extracting">✨ Extrair insights com IA</span>
-                            <span x-show="extracting">Analisando transcrição…</span>
+                            <span class="btn-busy" x-show="extracting"><span class="spinner spinner-sm" aria-hidden="true"></span>Analisando transcrição</span>
                         </button>
-                        <span x-show="extracting" class="loading-inline">A IA lê a transcrição e gera resumo, combinados e pontos de atenção.</span>
+                        <span x-show="extracting" class="loading-inline">
+                            <span class="spinner spinner-sm" aria-hidden="true"></span>
+                            A IA lê a transcrição e gera resumo, combinados e pontos de atenção
+                        </span>
                     </div>
 
                     <template x-if="sessionDetail.summary_ai">
@@ -775,9 +797,9 @@
                     <h5 style="font-weight:700; margin-bottom:0.4rem;">📋 Colar do Feedz (opcional)</h5>
                     <textarea class="form-control mono" rows="6" x-model="feedzText"
                               placeholder="Cole aqui as anotações do Feedz (ações, notas privadas e públicas). A IA estrutura tudo abaixo para você revisar."></textarea>
-                    <button class="btn-ai-action" style="margin-top:0.6rem;" @click="parseFeedz()" :disabled="parsingFeedz || !feedzText.trim()">
+                    <button class="btn-ai-action" style="margin-top:0.6rem;" @click="parseFeedz()" :disabled="parsingFeedz || !feedzText.trim()" :aria-busy="parsingFeedz">
                         <span x-show="!parsingFeedz">✨ Estruturar com IA</span>
-                        <span x-show="parsingFeedz">Analisando…</span>
+                        <span class="btn-busy" x-show="parsingFeedz"><span class="spinner spinner-sm" aria-hidden="true"></span>Analisando</span>
                     </button>
                 </div>
             </template>
@@ -817,8 +839,9 @@
                     <textarea class="form-control" rows="4" x-model="cpForm.public_notes"></textarea></div>
             </div>
 
-            <button class="btn-primary btn-inline" @click="saveCp()" :disabled="savingCp">
-                <span x-show="!savingCp">Salvar checkpoint</span><span x-show="savingCp">Salvando…</span>
+            <button class="btn-primary btn-inline" @click="saveCp()" :disabled="savingCp" :aria-busy="savingCp">
+                <span x-show="!savingCp">Salvar checkpoint</span>
+                <span class="btn-busy" x-show="savingCp"><span class="spinner spinner-sm" aria-hidden="true"></span>Salvando</span>
             </button>
         </div>
     </div>

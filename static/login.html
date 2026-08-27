@@ -14,9 +14,10 @@
             <h1 class="auth-title">Cortex</h1>
             <p class="auth-subtitle">Inteligência ao seu lado. Menos rotina, mais impacto.</p>
 
-            <button onclick="loginWithGoogle()" class="btn-google">
-                <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="Google" class="google-icon">
-                Entrar com conta TOTVS (Google)
+            <button type="button" onclick="loginWithGoogle()" class="btn-google" id="btn-google-login">
+                <span class="spinner spinner-sm" id="btn-google-spinner" hidden aria-hidden="true"></span>
+                <img src="https://www.svgrepo.com/show/475656/google-color.svg" alt="" class="google-icon" id="btn-google-icon">
+                <span id="btn-google-label">Entrar com conta TOTVS (Google)</span>
             </button>
 
             <p class="auth-switch" style="font-size:0.8rem;">Acesso exclusivo para e-mails autorizados.</p>

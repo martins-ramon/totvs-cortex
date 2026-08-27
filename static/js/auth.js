@@ -19,16 +19,34 @@ function showToast(message, type = 'info', title = null) {
 }
 
 async function loginWithGoogle() {
+    const btn = document.getElementById('btn-google-login');
+    const spinner = document.getElementById('btn-google-spinner');
+    const icon = document.getElementById('btn-google-icon');
+    const label = document.getElementById('btn-google-label');
+    if (btn) {
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        if (spinner) spinner.hidden = false;
+        if (icon) icon.hidden = true;
+        if (label) label.textContent = 'Redirecionando';
+    }
     try {
         const response = await fetch('/api/auth/google/login');
         const data = await response.json();
         if (data.redirect_url) {
             window.location.href = data.redirect_url;
-        } else {
-            showToast('Erro ao iniciar login com Google', 'error');
+            return;
         }
+        showToast('Erro ao iniciar login com Google', 'error');
     } catch (error) {
         showToast('Erro de conexão', 'error');
+    }
+    if (btn) {
+        btn.disabled = false;
+        btn.removeAttribute('aria-busy');
+        if (spinner) spinner.hidden = true;
+        if (icon) icon.hidden = false;
+        if (label) label.textContent = 'Entrar com conta TOTVS (Google)';
     }
 }
 

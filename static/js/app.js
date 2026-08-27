@@ -431,6 +431,7 @@ function cortexApp() {
                 showToast('Informe um e-mail válido.', 'warning');
                 return;
             }
+            this.savingPerson = true;
             try {
                 if (this.editingPerson) {
                     await this.api('/api/people/' + this.editingPerson.id, {
@@ -448,6 +449,8 @@ function cortexApp() {
                 await this.loadPeople();
             } catch (e) {
                 showToast(e.message, 'error');
+            } finally {
+                this.savingPerson = false;
             }
         },
 
