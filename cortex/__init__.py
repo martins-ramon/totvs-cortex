@@ -21,13 +21,14 @@ def create_app():
     CORS(app, supports_credentials=True)
 
     from .views import auth, people
-    from .views import sessions, checkpoints, cards, connections
+    from .views import sessions, checkpoints, cards, connections, dashboard
     app.register_blueprint(auth.bp)
     app.register_blueprint(people.bp)
     app.register_blueprint(sessions.bp)
     app.register_blueprint(checkpoints.bp)
     app.register_blueprint(cards.bp)
     app.register_blueprint(connections.bp)
+    app.register_blueprint(dashboard.bp)
 
     @app.route('/')
     def index():

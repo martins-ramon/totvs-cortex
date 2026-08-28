@@ -1,5 +1,9 @@
 /* Cortex SPA — componente principal (Alpine.js) */
 
+// Instâncias do Chart.js ficam fora do componente para não serem
+// "proxificadas" pela reatividade do Alpine (quebra o canvas).
+let _dashCharts = {};
+
 function cortexApp() {
     return {
         // --- estado ---
@@ -11,6 +15,7 @@ function cortexApp() {
         people: [],
         peopleFilter: 'active',
         recentSessions: [],
+        dash: null,
 
         currentPerson: null,
         currentTab: 'sessions',
@@ -96,6 +101,7 @@ function cortexApp() {
             try { this.sidebarCollapsed = localStorage.getItem('cortex.sidebarCollapsed') === '1'; } catch (e) { /* ignore */ }
             await this.loadPeople();
             this.loadRecentSessions();
+            this.loadDashboard();
             this.booted = true;
         },
 
@@ -124,8 +130,8 @@ function cortexApp() {
         go(view) {
             this.view = view;
             if (view !== 'person') this.expandedId = null;
-            if (view === 'people') this.loadPeople();
-            if (view === 'dashboard') this.loadRecentSessions();
+            if (view === 'people') { this.loadPeople(); this.loadRecentSessions(); }
+            if (view === 'dashboard') this.loadDashboard();
         },
 
         toggleSidebar() {
@@ -142,6 +148,104 @@ function cortexApp() {
         async loadRecentSessions() {
             const d = await this.api('/api/oneonones?limit=200');
             this.recentSessions = d.sessions;
+        },
+
+        // --- dashboard (home) ---
+        async loadDashboard() {
+            try {
+                const [d, c] = await Promise.all([
+                    this.api('/api/dashboard'),
+                    this.cardsLoaded ? Promise.resolve(null) : this.api('/api/cards/latest')
+                ]);
+                this.dash = d;
+                if (c) { this.cards = c.cards; this.cardsLoaded = true; }
+                this.$nextTick(() => this.renderDashCharts());
+            } catch (e) {
+                showToast(e.message, 'error');
+            }
+        },
+
+        renderDashCharts() {
+            if (!this.dash || this.view !== 'dashboard' || typeof Chart === 'undefined') return;
+            for (const key of Object.keys(_dashCharts)) {
+                _dashCharts[key].destroy();
+                delete _dashCharts[key];
+            }
+            const labels = this.dash.sentiment_weekly.map(w => {
+                const d = new Date(w.week_start + 'T12:00:00');
+                return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+            });
+            const font = { family: 'Inter', size: 10 };
+            const baseOpts = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom', labels: { boxWidth: 12, font: { family: 'Inter', size: 11 } } }
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { font } },
+                    y: { beginAtZero: true, ticks: { precision: 0, font } }
+                }
+            };
+            const el = id => document.getElementById(id);
+
+            if (el('chartSentiment')) {
+                _dashCharts.sentiment = new Chart(el('chartSentiment'), {
+                    type: 'bar',
+                    data: {
+                        labels,
+                        datasets: [
+                            { label: 'Positivo', data: this.dash.sentiment_weekly.map(w => w.positivo), backgroundColor: '#10B981', stack: 's' },
+                            { label: 'Neutro', data: this.dash.sentiment_weekly.map(w => w.neutro), backgroundColor: '#CBD5E1', stack: 's' },
+                            { label: 'Preocupante', data: this.dash.sentiment_weekly.map(w => w.preocupante), backgroundColor: '#EF4444', stack: 's' }
+                        ]
+                    },
+                    options: {
+                        ...baseOpts,
+                        scales: {
+                            x: { ...baseOpts.scales.x, stacked: true },
+                            y: { ...baseOpts.scales.y, stacked: true }
+                        }
+                    }
+                });
+            }
+
+            if (el('chartCadence')) {
+                const meta = Math.max(1, Math.ceil((this.k.active_people || 0) / 2));
+                _dashCharts.cadence = new Chart(el('chartCadence'), {
+                    data: {
+                        labels,
+                        datasets: [
+                            { type: 'bar', label: '1:1s realizados', data: this.dash.sessions_weekly.map(w => w.count), backgroundColor: '#6366F1', borderRadius: 4 },
+                            { type: 'line', label: 'Meta (quinzenal)', data: labels.map(() => meta), borderColor: '#F59E0B', borderDash: [6, 4], borderWidth: 2, pointRadius: 0, fill: false, tension: 0 }
+                        ]
+                    },
+                    options: baseOpts
+                });
+            }
+
+            if (el('chartCommitments')) {
+                _dashCharts.commitments = new Chart(el('chartCommitments'), {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [
+                            { label: 'Criados', data: this.dash.commitments_weekly.map(w => w.created), borderColor: '#6366F1', backgroundColor: 'rgba(99,102,241,0.10)', fill: true, tension: 0.3, pointRadius: 2 },
+                            { label: 'Concluídos', data: this.dash.commitments_weekly.map(w => w.closed), borderColor: '#10B981', backgroundColor: 'rgba(16,185,129,0.10)', fill: true, tension: 0.3, pointRadius: 2 }
+                        ]
+                    },
+                    options: baseOpts
+                });
+            }
+        },
+
+        cardOf(pid) {
+            return this.cards[String(pid)] || null;
+        },
+
+        openPersonById(pid) {
+            const p = this.people.find(x => String(x.id) === String(pid));
+            if (p) this.openPerson(p);
         },
 
         async openPerson(p) {
@@ -284,26 +388,61 @@ function cortexApp() {
                 ? this.people.filter(p => p.active)
                 : this.people;
         },
-        get stats() {
-            const today = new Date();
-            const byPerson = {};
-            let sessions30d = 0;
-            const THIRTY = 30 * 24 * 3600 * 1000;
-            for (const s of this.recentSessions) {
-                const t = new Date(s.occurred_on + 'T12:00:00');
-                if (!byPerson[s.person_id] || t > byPerson[s.person_id]) byPerson[s.person_id] = t;
-                if (today - t <= THIRTY) sessions30d++;
+        get k() {
+            return (this.dash && this.dash.kpis) || {};
+        },
+        get teamHealth() {
+            const counts = { verde: 0, amarelo: 0, vermelho: 0 };
+            for (const pid of Object.keys(this.cards)) {
+                const h = this.cards[pid].card_json.ai?.saude;
+                if (counts[h] !== undefined) counts[h]++;
+                else counts.amarelo++;
             }
-            let stale = 0;
-            for (const p of this.people.filter(x => x.active)) {
-                const last = byPerson[p.id];
-                if (!last || (today - last) > 21 * 24 * 3600 * 1000) stale++;
+            const total = counts.verde + counts.amarelo + counts.vermelho;
+            const tone = counts.vermelho > 0 ? 'red'
+                : (counts.amarelo > 0 ? 'yellow' : (total ? 'green' : 'none'));
+            return { ...counts, total, tone };
+        },
+        get pulseSorted() {
+            if (!this.dash) return [];
+            return [...this.dash.people_pulse].sort((a, b) => {
+                const sa = this.pulseScore(a), sb = this.pulseScore(b);
+                if (sb !== sa) return sb - sa;
+                return a.name.localeCompare(b.name);
+            });
+        },
+        pulseScore(p) {
+            let score = 0;
+            const card = this.cardOf(p.person_id);
+            const h = card && card.card_json.ai?.saude;
+            if (h === 'vermelho') score += 6;
+            else if (h === 'amarelo') score += 3;
+            if (p.days_since_last === null || p.days_since_last > 21) score += 4;
+            if (p.overdue_commitments > 0) score += 2;
+            if (p.last_sentiment === 'preocupante') score += 3;
+            return score;
+        },
+        get riskFeed() {
+            const items = [];
+            for (const pid of Object.keys(this.cards)) {
+                for (const r of (this.cards[pid].card_json.ai?.riscos || [])) {
+                    const nivel = r && (r.nivel === 'médio' ? 'medio' : r.nivel);
+                    if (nivel === 'alto' || nivel === 'medio') {
+                        const text = (r.descricao || '').trim();
+                        if (text) items.push({ person_id: pid, nivel, text });
+                    }
+                }
             }
-            return {
-                activePeople: this.activePeople.length,
-                stalePeople: stale,
-                sessions30d
-            };
+            items.sort((a, b) => (a.nivel === 'alto' ? 0 : 1) - (b.nivel === 'alto' ? 0 : 1));
+            const seen = new Set(items.map(i => String(i.person_id) + '|' + i.text.toLowerCase()));
+            for (const a of ((this.dash && this.dash.attention_points) || [])) {
+                const key = String(a.person_id) + '|' + a.text.toLowerCase();
+                if (!seen.has(key)) {
+                    items.push({ person_id: a.person_id, nivel: 'atencao', text: a.text });
+                    seen.add(key);
+                }
+            }
+            return items.slice(0, 8);
         },
         get trendEmoji() {
             const t = this.prep && this.prep.stats.sentiment_trend;

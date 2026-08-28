@@ -1171,3 +1171,44 @@ input:checked + .slider:before {
         animation: none;
     }
 }
+
+/* ============================================================
+   Dashboard "Início" — radar do time, gráficos e insights
+   ============================================================ */
+
+/* KPI de saúde do time */
+.stat-card.stat-health-red { border-top-color: #EF4444; }
+.stat-card.stat-health-yellow { border-top-color: #F59E0B; }
+.stat-card.stat-health-green { border-top-color: #10B981; }
+.health-dots { display: flex; gap: 0.5rem; align-items: center; }
+.hd { display: inline-flex; align-items: center; justify-content: center; min-width: 2.4rem; height: 2.4rem; padding: 0 0.5rem; border-radius: 10px; font-size: 1.15rem; font-weight: 800; }
+.hd-g { background: #D1FAE5; color: #065F46; }
+.hd-y { background: #FEF3C7; color: #92400E; }
+.hd-r { background: #FEE2E2; color: #991B1B; }
+
+/* Radar do time (tabela de pulse) */
+.pulse-table tr.pulse-row { cursor: pointer; }
+.pulse-table tr.pulse-row:hover { background: #FAFBFF; }
+.pulse-person { display: flex; align-items: center; gap: 0.65rem; }
+.pulse-person small { display: block; color: #94A3B8; font-size: 0.75rem; }
+.avatar-sm { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.78rem; flex-shrink: 0; }
+
+/* Gráficos */
+.charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem; margin-bottom: 1.5rem; }
+.chart-panel h4 { margin-bottom: 0.25rem; }
+.chart-hint { font-size: 0.78rem; color: #94A3B8; margin-bottom: 0.75rem; line-height: 1.4; }
+.chart-box { position: relative; height: 220px; }
+
+/* Painéis qualitativos */
+.insights-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.25rem; margin-bottom: 2rem; }
+.insight-list { list-style: none; display: flex; flex-direction: column; gap: 0.7rem; }
+.insight-list li { display: flex; gap: 0.6rem; align-items: flex-start; font-size: 0.88rem; color: #334155; line-height: 1.45; }
+.insight-list li strong { display: block; font-size: 0.8rem; color: #1E293B; }
+.insight-date { display: block; color: #94A3B8; font-size: 0.72rem; margin-top: 0.1rem; }
+.risk-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 0.35rem; }
+.risk-dot.risk-alto { background: #EF4444; }
+.risk-dot.risk-medio { background: #F59E0B; }
+.risk-dot.risk-atencao { background: #94A3B8; }
+.risk-dot.risk-win { background: #10B981; }
+.topic-chip { background: #EEF2FF; color: #4338CA; }
+.topic-chip b { font-weight: 800; margin-left: 0.2rem; }

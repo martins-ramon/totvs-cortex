@@ -6,6 +6,7 @@
     <title>Cortex — Gestão 1:1 e Performance</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/components.css">
     <style>
@@ -89,17 +90,35 @@
                     <p>Sua visão geral do time e das conversas 1:1.</p>
                 </div>
 
+                <!-- KPIs -->
                 <div class="stat-grid">
-                    <div class="stat-card">
-                        <div class="stat-number" x-text="stats.activePeople"></div>
-                        <div class="stat-label">Pessoas ativas no time</div>
+                    <div class="stat-card" :class="'stat-health-' + teamHealth.tone">
+                        <template x-if="teamHealth.total > 0">
+                            <div class="stat-number health-dots">
+                                <span class="hd hd-g" title="Saudável" x-text="teamHealth.verde"></span>
+                                <span class="hd hd-y" title="Atenção" x-text="teamHealth.amarelo"></span>
+                                <span class="hd hd-r" title="Crítico" x-text="teamHealth.vermelho"></span>
+                            </div>
+                        </template>
+                        <template x-if="teamHealth.total === 0">
+                            <div class="stat-number">—</div>
+                        </template>
+                        <div class="stat-label" x-text="teamHealth.total > 0 ? 'Saúde do time (cards IA)' : 'Saúde do time — gere os Cards do Time'"></div>
                     </div>
-                    <div class="stat-card" :class="{'stat-alert': stats.stalePeople > 0}">
-                        <div class="stat-number" x-text="stats.stalePeople"></div>
-                        <div class="stat-label">Sem 1:1 há mais de 21 dias</div>
+                    <div class="stat-card" :class="{'stat-alert': k.coverage_21d !== null && k.coverage_21d < 100}">
+                        <div class="stat-number" x-text="k.coverage_21d != null ? k.coverage_21d + '%' : '—'"></div>
+                        <div class="stat-label">Cadência: time com 1:1 em 21 dias</div>
+                    </div>
+                    <div class="stat-card" :class="{'stat-alert': k.overdue_commitments > 0}">
+                        <div class="stat-number" x-text="k.overdue_commitments ?? '—'"></div>
+                        <div class="stat-label">Combinados vencidos</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-number" x-text="stats.sessions30d"></div>
+                        <div class="stat-number" x-text="k.completion_rate_30d != null ? k.completion_rate_30d + '%' : '—'"></div>
+                        <div class="stat-label">Conclusão de combinados (30d)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number" x-text="k.sessions_30d ?? '—'"></div>
                         <div class="stat-label">1:1s nos últimos 30 dias</div>
                     </div>
                 </div>
@@ -109,28 +128,124 @@
                     <button class="btn-secondary btn-inline" @click="go('prep')">🧭 Preparar próximo 1:1</button>
                 </div>
 
-                <h3 class="section-title">Últimas sessões registradas</h3>
-                <template x-if="recentSessions.length === 0">
+                <!-- Radar do time -->
+                <h3 class="section-title">Radar do time</h3>
+                <template x-if="!dash || dash.people_pulse.length === 0">
                     <div class="empty-state">
-                        <p>Nenhum 1:1 registrado ainda.</p>
-                        <p class="form-hint">Cadastre seu time em "Meu Time" e registre a primeira conversa colando a transcrição do Google Meet.</p>
+                        <p>Nenhuma pessoa ativa no time ainda.</p>
+                        <p class="form-hint">Cadastre seu time em "Meu Time" e registre a primeira conversa 1:1.</p>
                     </div>
                 </template>
-                <div class="meetings-table" x-show="recentSessions.length > 0">
+                <div class="meetings-table pulse-table" x-show="dash && dash.people_pulse.length > 0">
                     <table>
-                        <thead><tr><th>Pessoa</th><th>Data</th><th>Título</th><th>Sentimento</th><th></th></tr></thead>
+                        <thead><tr><th>Pessoa</th><th>Saúde</th><th>Último 1:1</th><th>Sentimento</th><th>Combinados</th><th>Ritmo (90d)</th></tr></thead>
                         <tbody>
-                            <template x-for="s in recentSessions" :key="s.id">
-                                <tr>
-                                    <td x-text="personName(s.person_id)"></td>
-                                    <td x-text="fmtDate(s.occurred_on)"></td>
-                                    <td class="summary-preview" x-text="s.title || '1:1'"></td>
-                                    <td><span class="chip" :class="'sent-' + (s.sentiment || 'neutro')" x-text="s.sentiment || '—'"></span></td>
-                                    <td><button class="btn-small btn-view" @click="viewSession(s.id)">Abrir</button></td>
+                            <template x-for="p in pulseSorted" :key="p.person_id">
+                                <tr class="pulse-row" @click="openPersonById(p.person_id)">
+                                    <td>
+                                        <div class="pulse-person">
+                                            <div class="avatar-sm avatar-color" :class="colorClass(p.name)" x-text="initials(p.name)"></div>
+                                            <div>
+                                                <strong x-text="p.preferred_name || p.name"></strong>
+                                                <small x-text="p.role_title || ''"></small>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <template x-if="cardOf(p.person_id)">
+                                            <span>
+                                                <span class="health-chip" :class="'hc-' + (cardOf(p.person_id).card_json.ai?.saude || 'amarelo')" x-text="cardOf(p.person_id).card_json.ai?.saude || 'amarelo'"></span>
+                                                <span :title="trendInfo(cardOf(p.person_id)).label" x-text="trendInfo(cardOf(p.person_id)).emoji"></span>
+                                            </span>
+                                        </template>
+                                        <template x-if="!cardOf(p.person_id)"><span class="chip chip-muted">sem card</span></template>
+                                    </td>
+                                    <td>
+                                        <span :class="{'text-warn': p.days_since_last === null || p.days_since_last > 21}"
+                                              x-text="p.days_since_last === null ? 'nunca' : ('há ' + p.days_since_last + ' dia' + (p.days_since_last === 1 ? '' : 's'))"></span>
+                                    </td>
+                                    <td>
+                                        <span class="chip" :class="p.last_sentiment ? 'sent-' + p.last_sentiment : 'chip-muted'" x-text="p.last_sentiment || '—'"></span>
+                                    </td>
+                                    <td>
+                                        <span x-text="p.open_commitments + ' aberto' + (p.open_commitments === 1 ? '' : 's')"></span>
+                                        <span class="badge-overdue" x-show="p.overdue_commitments > 0" x-text="p.overdue_commitments + ' vencido' + (p.overdue_commitments === 1 ? '' : 's')"></span>
+                                    </td>
+                                    <td><span x-text="p.sessions_90d + ' 1:1s'"></span></td>
                                 </tr>
                             </template>
                         </tbody>
                     </table>
+                </div>
+
+                <!-- Tendências -->
+                <h3 class="section-title">Tendências (12 semanas)</h3>
+                <div class="charts-grid">
+                    <div class="panel chart-panel">
+                        <h4>Clima das 1:1s</h4>
+                        <p class="chart-hint">Sentimento das conversas por semana — tendência importa mais que o valor absoluto.</p>
+                        <div class="chart-box"><canvas id="chartSentiment"></canvas></div>
+                    </div>
+                    <div class="panel chart-panel">
+                        <h4>Cadência de 1:1s</h4>
+                        <p class="chart-hint">Conversas por semana vs. meta quinzenal — o primeiro ritual que degrada sob pressão.</p>
+                        <div class="chart-box"><canvas id="chartCadence"></canvas></div>
+                    </div>
+                    <div class="panel chart-panel">
+                        <h4>Fluxo de combinados</h4>
+                        <p class="chart-hint">Criados vs. concluídos — se a linha de criação supera a de conclusão, a dívida de execução cresce.</p>
+                        <div class="chart-box"><canvas id="chartCommitments"></canvas></div>
+                    </div>
+                </div>
+
+                <!-- Painéis qualitativos -->
+                <div class="insights-grid">
+                    <div class="panel">
+                        <h4>⚠️ Riscos e pontos de atenção</h4>
+                        <template x-if="riskFeed.length === 0">
+                            <p class="form-hint">Nenhum risco mapeado. Gere os Cards do Time e extraia insights das 1:1s para alimentar este radar.</p>
+                        </template>
+                        <ul class="insight-list">
+                            <template x-for="(r, i) in riskFeed" :key="i">
+                                <li>
+                                    <span class="risk-dot" :class="'risk-' + r.nivel"></span>
+                                    <div>
+                                        <strong x-text="personName(r.person_id)"></strong>
+                                        <span x-text="r.text"></span>
+                                    </div>
+                                </li>
+                            </template>
+                        </ul>
+                    </div>
+                    <div class="panel">
+                        <h4>🏆 Conquistas recentes</h4>
+                        <template x-if="!dash || dash.recent_wins.length === 0">
+                            <p class="form-hint">Nenhuma conquista registrada ainda. Elas aparecem aqui a partir da extração IA das 1:1s — reconheça em público!</p>
+                        </template>
+                        <ul class="insight-list">
+                            <template x-for="(w, i) in (dash ? dash.recent_wins : [])" :key="i">
+                                <li>
+                                    <span class="risk-dot risk-win"></span>
+                                    <div>
+                                        <strong x-text="personName(w.person_id)"></strong>
+                                        <span x-text="w.text"></span>
+                                        <small class="insight-date" x-text="fmtDate(w.occurred_on)"></small>
+                                    </div>
+                                </li>
+                            </template>
+                        </ul>
+                    </div>
+                    <div class="panel">
+                        <h4>🔥 Temas quentes (60 dias)</h4>
+                        <template x-if="!dash || dash.top_topics.length === 0">
+                            <p class="form-hint">Os tópicos mais recorrentes das 1:1s aparecem aqui após a extração IA.</p>
+                        </template>
+                        <div class="tag-row">
+                            <template x-for="t in (dash ? dash.top_topics : [])" :key="t.topic">
+                                <span class="chip topic-chip"><span x-text="t.topic"></span> <b x-text="t.count"></b></span>
+                            </template>
+                        </div>
+                    </div>
                 </div>
             </section>
 
