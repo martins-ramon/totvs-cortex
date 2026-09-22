@@ -14,6 +14,10 @@ function cortexApp() {
 
         people: [],
         peopleFilter: 'active',
+        calendarStatus: 'idle',
+        calendarMeetings: {},
+        calendarLookaheadDays: 90,
+        calendarRequestId: 0,
         recentSessions: [],
         dash: null,
 
@@ -82,11 +86,15 @@ function cortexApp() {
             }
             // Mensagens de retorno das conexões (OAuth redirect)
             const q = new URLSearchParams(window.location.search);
-            if (q.get('connected') === 'gmail') {
-                showToast('Gmail conectado com sucesso! ✓', 'success');
+            if (['gmail', 'calendar'].includes(q.get('connected'))) {
+                const name = q.get('connected') === 'calendar' ? 'Google Agenda' : 'Gmail';
+                showToast(`${name} conectado com sucesso! ✓`, 'success');
                 this.view = 'connections';
             } else if (q.get('error')) {
                 const msgs = {
+                    'calendar_denied': 'Autorização do Google Agenda negada. Você pode tentar novamente quando quiser.',
+                    'calendar_scope': 'Autorize a leitura dos eventos para consultar os próximos 1:1s.',
+                    'calendar_forbidden': 'Não foi possível acessar o Google Agenda. Reconecte e verifique se a Google Calendar API está habilitada.',
                     'gmail_denied': 'Autorização do Gmail negada. Você pode tentar novamente quando quiser.',
                     'invalid_state': 'Sessão de conexão expirada. Tente conectar novamente.',
                     'gmail_scope': 'O Google não concedeu a leitura da caixa de entrada. Conecte de novo e aceite “Ver seus e-mails”.',
@@ -102,6 +110,7 @@ function cortexApp() {
             await this.loadPeople();
             this.loadRecentSessions();
             this.loadDashboard();
+            if (this.view === 'connections') this.loadConnections();
             this.booted = true;
         },
 
@@ -143,6 +152,36 @@ function cortexApp() {
         async loadPeople() {
             const d = await this.api('/api/people');
             this.people = d.people;
+            if (this.view === 'people') this.loadCalendarMeetings();
+        },
+
+        async loadCalendarMeetings() {
+            const requestId = ++this.calendarRequestId;
+            this.calendarStatus = 'loading';
+            this.calendarMeetings = {};
+            try {
+                const d = await this.api('/api/people/upcoming-oneonones');
+                if (requestId !== this.calendarRequestId) return;
+                this.calendarMeetings = d.meetings || {};
+                this.calendarLookaheadDays = d.lookahead_days || 90;
+                this.calendarStatus = d.status;
+            } catch (e) {
+                if (requestId === this.calendarRequestId) this.calendarStatus = 'unavailable';
+            }
+        },
+
+        nextSessionInfo(person) {
+            if (!person.email) return 'Cadastre o e-mail para consultar a agenda';
+            if (['idle', 'loading'].includes(this.calendarStatus)) return 'Consultando Google Agenda…';
+            if (this.calendarStatus === 'not_connected') return 'Google Agenda não conectado';
+            if (this.calendarStatus === 'needs_reauth') return 'Reconecte o Google Agenda para consultar';
+            if (this.calendarStatus !== 'connected') return 'Não foi possível consultar a agenda';
+            const meeting = this.calendarMeetings[person.id];
+            if (!meeting) return `Sem 1:1 agendado nos próximos ${this.calendarLookaheadDays} dias`;
+            const date = new Date(meeting.all_day ? meeting.start + 'T12:00:00' : meeting.start);
+            const day = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            const time = meeting.all_day ? 'dia inteiro' : date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            return `Próximo 1:1: ${day} · ${time}`;
         },
 
         async loadRecentSessions() {
@@ -973,6 +1012,11 @@ function cortexApp() {
             if (!confirm(`Desconectar o ${tool.name}? O Cortex perderá o acesso a ele.`)) return;
             try {
                 await this.api(`/api/connections/${tool.id}/disconnect`, { method: 'POST' });
+                if (tool.id === 'calendar') {
+                    ++this.calendarRequestId;
+                    this.calendarMeetings = {};
+                    this.calendarStatus = 'not_connected';
+                }
                 showToast(`${tool.name} desconectado.`, 'success');
                 await this.loadConnections();
             } catch (e) {

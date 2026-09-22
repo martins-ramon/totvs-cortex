@@ -968,6 +968,9 @@ input:checked + .slider:before {
 .person-email { display: block; font-size: 0.8rem; color: #6366F1; margin-top: 0.15rem; word-break: break-all; }
 .person-email.missing { color: #94A3B8; font-style: italic; }
 .person-card-foot { border-top: 1px solid #F1F5F9; padding-top: 0.6rem; font-size: 0.85rem; }
+.next-session-info { display: flex; flex-direction: column; align-items: flex-start; gap: 0.25rem; margin-top: 0.45rem; color: #64748B; line-height: 1.5; }
+.next-session-info.is-scheduled { color: #15803D; }
+.next-session-info.is-unscheduled { color: #B45309; }
 .badge-inactive { margin-left: auto; background: #F1F5F9; color: #94A3B8; font-size: 0.7rem; font-weight: 700; padding: 0.2rem 0.55rem; border-radius: 12px; text-transform: uppercase; }
 .text-warn { color: #DC2626; font-weight: 600; }
 

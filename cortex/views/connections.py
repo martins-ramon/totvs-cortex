@@ -1,7 +1,7 @@
 """Conexões com ferramentas externas.
 
-Gmail é a primeira integração disponível (leitura somente-leitura via
-OAuth do Google). Slack, Drive e Agenda aparecem como "em breve".
+Gmail e Google Agenda usam OAuth somente para leitura.
+Slack e Drive aparecem como "em breve".
 """
 import os
 import secrets
@@ -14,6 +14,7 @@ from sqlalchemy import text
 from ..database import session_factory
 from ..security import login_required
 from .. import gmail as gmail_svc
+from .. import calendar as calendar_svc
 
 bp = Blueprint("connections", __name__, url_prefix="/api")
 
@@ -59,14 +60,14 @@ TOOLS = [
         "id": "calendar",
         "name": "Google Agenda",
         "icon": "/static/images/Google_Calendar_icon.webp",
-        "description": "Detecta os 1:1s agendados e lembra você de registrá-los.",
-        "available": False,
+        "description": "Mostra o próximo 1:1 com cada liderado em Meu Time, consultando os próximos 90 dias da sua agenda principal.",
+        "available": True,
     },
 ]
 
 
-def _redirect_uri():
-    return request.host_url.replace('http://', 'https://').rstrip('/') + "/api/connections/gmail/callback"
+def _redirect_uri(tool_id="gmail"):
+    return request.host_url.replace('http://', 'https://').rstrip('/') + f"/api/connections/{tool_id}/callback"
 
 
 @bp.route('/connections', methods=['GET'])
@@ -108,7 +109,7 @@ def connect_start(tool_id):
     if not client_id or not client_secret:
         return jsonify({"error": "Google OAuth não configurado (Secrets ausentes)."}), 500
 
-    if tool_id == "gmail":
+    if tool_id in ("gmail", "calendar"):
         db = session_factory()
         try:
             user_email = db.execute(text("SELECT email FROM users WHERE id = :uid"),
@@ -116,16 +117,17 @@ def connect_start(tool_id):
         finally:
             db.close()
 
-        session['conn_state'] = secrets.token_urlsafe(16)
-        cfg = requests.get(GOOGLE_DISCOVERY_URL).json()
-        url = requests.Request('GET', cfg["authorization_endpoint"], params={
+        state_key = 'conn_state' if tool_id == 'gmail' else 'calendar_conn_state'
+        session[state_key] = secrets.token_urlsafe(16)
+        scopes = GMAIL_SCOPES if tool_id == 'gmail' else [calendar_svc.READONLY_SCOPE, 'openid', 'email']
+        url = requests.Request('GET', 'https://accounts.google.com/o/oauth2/v2/auth', params={
             "client_id": client_id,
-            "scope": " ".join(GMAIL_SCOPES),
+            "scope": " ".join(scopes),
             "response_type": "code",
             "access_type": "offline",
             "prompt": "consent",
-            "redirect_uri": _redirect_uri(),
-            "state": session['conn_state'],
+            "redirect_uri": _redirect_uri(tool_id),
+            "state": session[state_key],
             "login_hint": user_email[0] if user_email else None,
         }).prepare().url
         return jsonify({"redirect_url": url})
@@ -221,20 +223,81 @@ def gmail_callback():
     return redirect('/connections?connected=gmail')
 
 
+@bp.route('/connections/calendar/callback')
+def calendar_callback():
+    if 'user_id' not in session:
+        return redirect('/login')
+    expected_state = session.pop('calendar_conn_state', None)
+    state = request.args.get('state')
+    if not state or not expected_state or not secrets.compare_digest(state, expected_state):
+        return redirect('/connections?error=invalid_state')
+    if request.args.get('error') == 'access_denied':
+        return redirect('/connections?error=calendar_denied')
+    code = request.args.get('code')
+    if not code:
+        return redirect('/connections?error=token_exchange_failed')
+    client_id, client_secret = _google_creds()
+    try:
+        response = requests.post(calendar_svc.TOKEN_URL, data={
+            "code": code, "client_id": client_id, "client_secret": client_secret,
+            "redirect_uri": _redirect_uri('calendar'), "grant_type": "authorization_code",
+        }, timeout=15)
+        response.raise_for_status()
+        tokens = response.json()
+        access_token = tokens.get('access_token')
+        if not access_token:
+            return redirect('/connections?error=token_exchange_failed')
+        scopes = tokens.get('scope') or ''
+        if calendar_svc.READONLY_SCOPE not in scopes.split():
+            return redirect('/connections?error=calendar_scope')
+        profile_response = requests.get('https://openidconnect.googleapis.com/v1/userinfo',
+            headers={"Authorization": f"Bearer {access_token}"}, timeout=15)
+        profile_response.raise_for_status()
+        profile = profile_response.json()
+        account_email = profile.get('email')
+        if not account_email or not profile.get('email_verified'):
+            return redirect('/connections?error=calendar_forbidden')
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(tokens.get('expires_in', 3600)))
+    except (requests.RequestException, ValueError, TypeError):
+        return redirect('/connections?error=calendar_forbidden')
+
+    db = session_factory()
+    try:
+        db.execute(text("""
+            INSERT INTO connections
+                (user_id, tool, status, account_email, scopes, access_token, refresh_token, expires_at)
+            VALUES (:uid, 'calendar', 'connected', :acct, :scopes, :at, :rt, :exp)
+            ON CONFLICT (user_id, tool) DO UPDATE SET
+                status = 'connected', account_email = EXCLUDED.account_email,
+                scopes = EXCLUDED.scopes, access_token = EXCLUDED.access_token,
+                refresh_token = CASE WHEN connections.account_email = EXCLUDED.account_email
+                    THEN COALESCE(EXCLUDED.refresh_token, connections.refresh_token)
+                    ELSE EXCLUDED.refresh_token END,
+                expires_at = EXCLUDED.expires_at, updated_at = CURRENT_TIMESTAMP
+        """), {"uid": session['user_id'], "acct": account_email, "scopes": scopes,
+               "at": access_token, "rt": tokens.get('refresh_token'), "exp": expires_at})
+        db.commit()
+    finally:
+        db.close()
+    return redirect('/connections?connected=calendar')
+
+
 @bp.route('/connections/<tool_id>/disconnect', methods=['POST'])
 @login_required
 def disconnect(tool_id):
-    if tool_id != "gmail":
+    if tool_id not in ("gmail", "calendar"):
         return jsonify({"error": "Integração ainda não disponível."}), 400
 
     db = session_factory()
     try:
         row = db.execute(text("""
             SELECT refresh_token FROM connections
-            WHERE user_id = :uid AND tool = 'gmail'
-        """), {"uid": session['user_id']}).fetchone()
+            WHERE user_id = :uid AND tool = :tool
+        """), {"uid": session['user_id'], "tool": tool_id}).fetchone()
 
-        if row and row[0]:
+        # Revogar um token Google pode revogar também outras integrações do mesmo
+        # cliente OAuth. Ao desconectar a Agenda, removemos somente seu acesso local.
+        if tool_id == 'gmail' and row and row[0]:
             try:
                 requests.post("https://oauth2.googleapis.com/revoke",
                               data={"token": row[0]},
@@ -243,8 +306,8 @@ def disconnect(tool_id):
                 print(f"Aviso: falha ao revogar token no Google: {e}")
 
         db.execute(text("""
-            DELETE FROM connections WHERE user_id = :uid AND tool = 'gmail'
-        """), {"uid": session['user_id']})
+            DELETE FROM connections WHERE user_id = :uid AND tool = :tool
+        """), {"uid": session['user_id'], "tool": tool_id})
         db.commit()
         gmail_svc.clear_auth_skip(session['user_id'])
         return jsonify({"success": True})

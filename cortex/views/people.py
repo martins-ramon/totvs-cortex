@@ -1,10 +1,11 @@
 import base64
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
 from sqlalchemy import text
 
 from ..database import session_factory
 from ..security import login_required
+from .. import calendar as calendar_svc
 
 bp = Blueprint("people", __name__, url_prefix="/api")
 
@@ -99,6 +100,20 @@ def api_create_person():
     except Exception as e:
         db.rollback()
         return jsonify({"error": str(e)}), 500
+    finally:
+        db.close()
+
+
+@bp.route('/people/upcoming-oneonones', methods=['GET'])
+@login_required
+def api_upcoming_oneonones():
+    db = session_factory()
+    try:
+        rows = db.execute(text("SELECT id, email FROM people")).fetchall()
+        people = [{"id": row[0], "email": row[1]} for row in rows]
+        response = jsonify(calendar_svc.upcoming_oneonones(db, session['user_id'], people))
+        response.headers['Cache-Control'] = 'no-store'
+        return response
     finally:
         db.close()
 

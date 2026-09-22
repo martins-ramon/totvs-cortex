@@ -35,6 +35,17 @@ Produção (Replit): `gunicorn app:app --bind 0.0.0.0:5000 --workers 4 --timeout
 Redirect URIs do Google OAuth no Google Cloud Console:
 - Login: `https://<seu-repl>.replit.app/api/auth/google/callback`
 - Conexão Gmail: `https://<seu-repl>.replit.app/api/connections/gmail/callback`
+- Conexão Google Agenda: `https://<seu-repl>.replit.app/api/connections/calendar/callback`
+
+### Próximos 1:1s em Meu Time
+
+Habilite a **Google Calendar API** no mesmo projeto Google Cloud do login e adicione o redirect URI da Agenda acima. Em **Conexões → Google Agenda**, autorize a leitura dos eventos (`calendar.events.readonly`) e a identificação da conta (`openid email`). A conexão Gmail não concede acesso à Agenda.
+
+Em **Meu Time**, cada pessoa passa a mostrar o próximo 1:1 abaixo do tempo desde a última conversa. A consulta é feita ao abrir a seção, para os **próximos 90 dias da agenda principal**, incluindo ocorrências de eventos recorrentes. O horário aparece no fuso do navegador; eventos de dia inteiro preservam a data da agenda.
+
+O encontro precisa ter um título como `1:1`, `1x1`, `1-1`, `1/1`, `1on1`, `one-on-one`, `one-to-one` ou `um a um` e o e-mail cadastrado do liderado entre os participantes/organizador. Eventos de grupo, cancelados ou recusados pelo diretor ou liderado são ignorados. Salas de reunião não contam como participantes. Sem e-mail ou acesso à Agenda, a tela informa a pendência; erros de consulta nunca aparecem como “sem agendamento”. Desconectar a Agenda remove os tokens locais sem revogar o acesso de outras integrações Google.
+
+Referência da API: [Events: list — Google Calendar](https://developers.google.com/workspace/calendar/api/v3/reference/events/list).
 
 ### Limpeza de tabelas legadas
 

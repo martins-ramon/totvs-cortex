@@ -273,12 +273,21 @@
                                     <h4 x-text="p.preferred_name || p.full_name"></h4>
                                     <small x-text="p.role_title || 'Cargo não definido'"></small>
                                     <small class="person-email" x-show="p.email" x-text="p.email"></small>
-                                    <small class="person-email missing" x-show="!p.email">Sem e-mail — necessário para cruzar a caixa de entrada</small>
+                                    <small class="person-email missing" x-show="!p.email">Sem e-mail — necessário para consultar e-mails e agenda</small>
                                 </div>
                                 <span class="badge-inactive" x-show="!p.active">Inativo</span>
                             </div>
                             <div class="person-card-foot">
                                 <span x-html="lastSessionInfo(p.id)"></span>
+                                <div class="next-session-info"
+                                     :class="{'is-scheduled': p.email && calendarStatus === 'connected' && calendarMeetings[p.id], 'is-unscheduled': p.email && calendarStatus === 'connected' && !calendarMeetings[p.id]}"
+                                     aria-live="polite">
+                                    <span x-text="nextSessionInfo(p)"></span>
+                                    <button class="btn-link" x-show="p.email && ['not_connected', 'needs_reauth'].includes(calendarStatus)"
+                                            @click.stop="goConnections()">Ir para Conexões</button>
+                                    <button class="btn-link" x-show="p.email && calendarStatus === 'unavailable'"
+                                            @click.stop="loadCalendarMeetings()">Tentar novamente</button>
+                                </div>
                             </div>
                         </div>
                     </template>
@@ -748,8 +757,8 @@
                                 </template>
                                 <template x-if="tool.available && tool.status === 'needs_reauth'">
                                     <div>
-                                        <p class="form-hint" style="margin-bottom:0.6rem;">Permissão de leitura ausente. Reconecte e aceite “Ver seus e-mails”.</p>
-                                        <button class="btn-primary btn-inline" @click="connectTool(tool)">Reconectar Gmail</button>
+                                        <p class="form-hint" style="margin-bottom:0.6rem;" x-text="tool.id === 'calendar' ? 'Reconecte e autorize a leitura dos eventos da sua agenda.' : 'Permissão de leitura ausente. Reconecte e aceite “Ver seus e-mails”.'"></p>
+                                        <button class="btn-primary btn-inline" @click="connectTool(tool)" x-text="'Reconectar ' + tool.name"></button>
                                     </div>
                                 </template>
                                 <template x-if="tool.available && tool.status !== 'connected' && tool.status !== 'needs_reauth'">
@@ -766,6 +775,10 @@
                     </template>
                 </div>
 
+                <p class="form-hint" style="margin-top:1.25rem;">
+                    O Google Agenda é consultado somente para leitura. Os 1:1s são identificados pelo título (como “1:1”, “1x1” ou “one-on-one”) e pelo e-mail do liderado entre os participantes.
+                    A consulta cobre os próximos 90 dias da agenda principal.
+                </p>
                 <p class="form-hint" style="margin-top:1.25rem;">
                     O acesso ao Gmail é somente para leitura — o Cortex nunca envia ou apaga e-mails.
                     Na autorização, aceite “Ver seus e-mails”. Se os cards falharem com 403, desconecte e conecte de novo.
