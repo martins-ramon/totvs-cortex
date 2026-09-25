@@ -15,7 +15,7 @@ from ..security import login_required
 bp = Blueprint("dashboard", __name__, url_prefix="/api")
 
 _WEEKS = 12          # janela dos gráficos semanais
-_STALE_DAYS = 21     # mesmo threshold usado no restante do app
+_MONTHS = 6          # janela da cadência mensal (inclui o mês em andamento)
 _TOPICS_DAYS = 60    # janela dos temas quentes
 _QUAL_SESSIONS = 20  # sessões recentes vasculhadas p/ conquistas e atenção
 
@@ -31,11 +31,19 @@ def _week_series(today):
     return [current - timedelta(weeks=i) for i in range(_WEEKS - 1, -1, -1)]
 
 
+def _month_series(today):
+    """Primeiro dia dos últimos _MONTHS meses, em ordem cronológica."""
+    current = today.year * 12 + today.month - 1
+    return [date(index // 12, index % 12 + 1, 1)
+            for index in range(current - _MONTHS + 1, current + 1)]
+
+
 @bp.route('/dashboard', methods=['GET'])
 @login_required
 def dashboard():
     today = date.today()
     weeks = _week_series(today)
+    months = _month_series(today)
     window_start = weeks[0]
 
     db = session_factory()
@@ -52,8 +60,9 @@ def dashboard():
         last_rows = db.execute(text("""
             SELECT DISTINCT ON (person_id) person_id, occurred_on, sentiment
             FROM one_on_ones
+            WHERE occurred_on <= :today
             ORDER BY person_id, occurred_on DESC, id DESC
-        """)).fetchall()
+        """), {"today": today}).fetchall()
         last_by_person = {r[0]: {"occurred_on": r[1], "sentiment": r[2]} for r in last_rows}
 
         # --- combinados abertos/vencidos por pessoa ---
@@ -94,7 +103,22 @@ def dashboard():
         denom = done_30d + overdue_all
         completion_rate_30d = round(done_30d * 100 / denom) if denom else None
 
-        # --- série semanal: sentimento + cadência de 1:1s ---
+        # --- cadência mensal: cada pessoa ativa conta no máximo uma vez ---
+        monthly_rows = db.execute(text("""
+            SELECT date_trunc('month', s.occurred_on)::date AS month,
+                   COUNT(DISTINCT s.person_id)
+            FROM one_on_ones s
+            JOIN people p ON p.id = s.person_id AND p.active = TRUE
+            WHERE s.occurred_on >= :since AND s.occurred_on <= :today
+            GROUP BY month
+        """), {"since": months[0], "today": today}).fetchall()
+        monthly_map = {r[0]: r[1] for r in monthly_rows}
+        cadence_monthly = [{
+            "month_start": month.isoformat(),
+            "people_count": monthly_map.get(month, 0),
+        } for month in months]
+
+        # --- série semanal: sentimento + volume de 1:1s ---
         weekly_rows = db.execute(text("""
             SELECT date_trunc('week', occurred_on)::date AS wk,
                    COUNT(*) AS total,
@@ -140,15 +164,13 @@ def dashboard():
 
         # --- pulse por pessoa ---
         people_pulse = []
-        stale_people = 0
         covered = 0
         for pid, full_name, preferred_name, role_title in people_rows:
             last = last_by_person.get(pid)
             days_since = (today - last["occurred_on"]).days if last else None
-            if days_since is not None and days_since <= _STALE_DAYS:
+            has_session_this_month = bool(last and last["occurred_on"] >= months[-1])
+            if has_session_this_month:
                 covered += 1
-            else:
-                stale_people += 1
             comm = comm_by_person.get(pid, {"open": 0, "overdue": 0})
             people_pulse.append({
                 "person_id": pid,
@@ -156,13 +178,14 @@ def dashboard():
                 "preferred_name": preferred_name,
                 "role_title": role_title,
                 "days_since_last": days_since,
+                "has_session_this_month": has_session_this_month,
                 "last_occurred_on": last["occurred_on"].isoformat() if last else None,
                 "last_sentiment": last["sentiment"] if last else None,
                 "open_commitments": comm["open"],
                 "overdue_commitments": comm["overdue"],
                 "sessions_90d": freq_by_person.get(pid, 0),
             })
-        coverage_21d = (round(covered * 100 / len(active_ids))
+        coverage_month = (round(covered * 100 / len(active_ids))
                         if active_ids else None)
 
         # --- temas quentes (topics JSONB, últimos _TOPICS_DAYS dias) ---
@@ -214,8 +237,8 @@ def dashboard():
         return jsonify({
             "kpis": {
                 "active_people": len(active_ids),
-                "coverage_21d": coverage_21d,
-                "stale_people": stale_people,
+                "coverage_month": coverage_month,
+                "pending_people_month": len(active_ids) - covered,
                 "sessions_30d": sessions_30d,
                 "open_commitments": open_all,
                 "overdue_commitments": overdue_all,
@@ -225,6 +248,7 @@ def dashboard():
             "people_pulse": people_pulse,
             "sentiment_weekly": sentiment_weekly,
             "sessions_weekly": sessions_weekly,
+            "cadence_monthly": cadence_monthly,
             "commitments_weekly": commitments_weekly,
             "top_topics": top_topics,
             "recent_wins": recent_wins,

@@ -1019,6 +1019,7 @@ input:checked + .slider:before {
 .two-col-form { display:grid; grid-template-columns:1fr 1fr; gap:0 1rem; }
 .timeline-item { position:relative; padding-left:1.4rem; margin-bottom:1.1rem; border-left:2px solid #E2E8F0; padding-bottom:0.4rem; }
 .timeline-item:last-child { border-left-color:transparent; }
+.prep-session-summary { white-space:pre-wrap; overflow-wrap:anywhere; }
 .timeline-dot { position:absolute; left:-7px; top:4px; width:12px; height:12px; border-radius:50%; border:2px solid white; }
 .dot-green { background:#10B981; } .dot-yellow { background:#F59E0B; } .dot-red { background:#EF4444; }
 .tag-row { display:flex; flex-wrap:wrap; gap:0.35rem; margin-top:0.4rem; }

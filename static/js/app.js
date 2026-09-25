@@ -250,13 +250,19 @@ function cortexApp() {
             }
 
             if (el('chartCadence')) {
-                const meta = Math.max(1, Math.ceil((this.k.active_people || 0) / 2));
+                const meta = this.k.active_people || 0;
+                const monthly = this.dash.cadence_monthly;
+                const monthLabels = monthly.map((m, i) => {
+                    const label = new Date(m.month_start + 'T12:00:00')
+                        .toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
+                    return i === monthly.length - 1 ? label + ' (em andamento)' : label;
+                });
                 _dashCharts.cadence = new Chart(el('chartCadence'), {
                     data: {
-                        labels,
+                        labels: monthLabels,
                         datasets: [
-                            { type: 'bar', label: '1:1s realizados', data: this.dash.sessions_weekly.map(w => w.count), backgroundColor: '#6366F1', borderRadius: 4 },
-                            { type: 'line', label: 'Meta (quinzenal)', data: labels.map(() => meta), borderColor: '#F59E0B', borderDash: [6, 4], borderWidth: 2, pointRadius: 0, fill: false, tension: 0 }
+                            { type: 'bar', label: 'Pessoas com 1:1 no mês', data: monthly.map(m => m.people_count), backgroundColor: '#6366F1', borderRadius: 4 },
+                            { type: 'line', label: 'Meta mensal (time ativo)', data: monthLabels.map(() => meta), borderColor: '#F59E0B', borderDash: [6, 4], borderWidth: 2, pointRadius: 0, fill: false, tension: 0 }
                         ]
                     },
                     options: baseOpts
@@ -456,7 +462,7 @@ function cortexApp() {
             const h = card && card.card_json.ai?.saude;
             if (h === 'vermelho') score += 6;
             else if (h === 'amarelo') score += 3;
-            if (p.days_since_last === null || p.days_since_last > 21) score += 4;
+            if (!p.has_session_this_month) score += 4;
             if (p.overdue_commitments > 0) score += 2;
             if (p.last_sentiment === 'preocupante') score += 3;
             return score;
