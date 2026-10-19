@@ -119,8 +119,8 @@ def create_session():
             "pnotes": data.get('private_notes') or None,
             "pubnotes": data.get('public_notes') or None,
         })
-        db.commit()
         session_id = result.fetchone()[0]
+        db.commit()
         return jsonify({"success": True, "session_id": session_id}), 201
     except ValueError as e:
         return jsonify({"error": str(e)}), 400

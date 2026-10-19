@@ -94,8 +94,8 @@ def api_create_person():
             "hired": hired_at,
             "notes": data.get('notes') or None,
         })
-        db.commit()
         person_id = result.fetchone()[0]
+        db.commit()
         return jsonify({"success": True, "person_id": person_id}), 201
     except Exception as e:
         db.rollback()

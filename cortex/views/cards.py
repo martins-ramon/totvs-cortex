@@ -239,8 +239,8 @@ def generate_start():
             INSERT INTO card_jobs (status, total, done) VALUES ('running', :total, 0)
             RETURNING id
         """), {"total": len(people)})
-        db.commit()
         job_id = result.fetchone()[0]
+        db.commit()
         return jsonify({
             "job_id": job_id,
             "people": [{"id": p[0], "full_name": p[1], "email": p[2]} for p in people],

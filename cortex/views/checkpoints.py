@@ -153,8 +153,8 @@ def create_checkpoint():
             "source": data.get('source') or 'feedz_paste',
             "raw": data.get('raw_input') or None,
         })
-        db.commit()
         cp_id = result.fetchone()[0]
+        db.commit()
         return jsonify({"success": True, "checkpoint_id": cp_id}), 201
     finally:
         db.close()

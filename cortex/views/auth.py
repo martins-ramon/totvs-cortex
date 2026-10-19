@@ -50,8 +50,8 @@ def register():
                 "company": data.get('company', ''),
                 "phone": data.get('phone', '')
             })
-        db.commit()
         user_id = result.fetchone()[0]
+        db.commit()
         session['user_id'] = user_id
         return jsonify({"success": True, "user_id": user_id})
     except Exception as e:
@@ -277,8 +277,8 @@ def google_callback():
                     "norm": normalized_name,
                     "gid": google_id
                 })
-                db.commit()
                 user = result.fetchone()
+                db.commit()
 
             session['user_id'] = user[0]
             return redirect('/')

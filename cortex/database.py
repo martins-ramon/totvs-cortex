@@ -54,6 +54,9 @@ def get_engine():
 def session_factory():
     """Retorna uma nova Session. Uso padrão nos views:
 
+    Consuma resultados (inclusive INSERT ... RETURNING) antes de commit/close:
+    no NullPool, o commit fecha a conexão e invalida os cursores pendentes.
+
         db = session_factory()
         try:
             ...
