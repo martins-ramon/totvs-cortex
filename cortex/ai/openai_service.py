@@ -4,6 +4,10 @@ from unidecode import unidecode
 
 _client = None
 
+# Modelo econômico compartilhado pelas extrações e pelos cards.
+# reasoning_effort="none" evita raciocínio adicional e permite usar temperature.
+_EXTRACTION_MODEL = "gpt-6-luna"
+
 
 def get_client():
     """Cliente OpenAI criado sob demanda (não derruba a aplicação na importação)."""
@@ -30,7 +34,7 @@ def normalize_text(text: str) -> str:
 
 
 def extract_meeting_insights(person_name: str, meeting_date: str, transcript: str):
-    """Extrai insights estruturados de uma transcrição de 1:1 (gpt-4o-mini, JSON).
+    """Extrai insights estruturados de uma transcrição de 1:1 (JSON).
 
     Retorna dict com: resumo, sentimento, topicos, combinados
     (descricao/responsavel/prazo), pontos_atencao, pontos_desenvolvimento,
@@ -56,7 +60,8 @@ Transcrição:
 {transcript}"""
 
     response = get_client().chat.completions.create(
-        model="gpt-4o-mini",
+        model=_EXTRACTION_MODEL,
+        reasoning_effort="none",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0.2,
@@ -93,7 +98,8 @@ CONTEÚDO DO FEEDZ:
 {raw_text}"""
 
     response = get_client().chat.completions.create(
-        model="gpt-4o-mini",
+        model=_EXTRACTION_MODEL,
+        reasoning_effort="none",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0.2,
@@ -123,7 +129,8 @@ THREADS:
 {email_context}"""
 
     response = get_client().chat.completions.create(
-        model="gpt-4o-mini",
+        model=_EXTRACTION_MODEL,
+        reasoning_effort="none",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0.2,
@@ -212,7 +219,8 @@ CONTEXTO CONSOLIDADO:
 {prep_context}"""
 
     response = get_client().chat.completions.create(
-        model="gpt-4o-mini",
+        model=_EXTRACTION_MODEL,
+        reasoning_effort="none",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0.3,

@@ -7,10 +7,12 @@ Sistema single-user: apenas o diretor autentica via Google (allowlist TOTVS); li
 ## Stack
 
 - **Backend**: Python 3.11+ / Flask (pacote `cortex/`)
-- **IA**: OpenAI (`gpt-4o-mini` para extrações/cards, `gpt-4o` para agenda sugerida)
+- **IA**: OpenAI (`gpt-6-luna` para extrações/cards, com `reasoning_effort="none"`; `gpt-4o` para agenda sugerida)
 - **Banco**: PostgreSQL no Supabase (sem extensões adicionais)
 - **Frontend**: HTML/CSS/JS vanilla + Alpine.js via CDN, sem build step
 - **Hospedagem**: Vercel (Flask / Python 3.13 / Fluid Compute)
+
+As extrações e os cards usam o [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), modelo voltado a tarefas frequentes com baixo custo. O raciocínio adicional fica desativado para conter custo e latência; as respostas continuam em JSON pela Chat Completions API.
 
 ## Deploy na Vercel
 

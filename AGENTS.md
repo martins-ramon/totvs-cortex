@@ -15,7 +15,7 @@ Cortex: Flask + vanilla JS app para gestão de 1:1s e performance de time. Singl
 ## Required environment
 
 - `DATABASE_URL`: Supabase Postgres URI — Transaction Pooler port **6543**, not 5432.
-- `OPENAI_API_KEY`: needed for all AI features (`gpt-4o-mini` extraction/cards, `gpt-4o` agenda).
+- `OPENAI_API_KEY`: needed for all AI features (`gpt-6-luna` extraction/cards with `reasoning_effort="none"`, `gpt-4o` agenda).
 - `ALLOWED_EMAILS`: exact e-mails allowed to log in (comma-separated). `ALLOWED_EMAIL_DOMAINS`: domains allowed (default `totvs.com` when neither is set). OAuth callback redirects non-allowed users to `/login?error=forbidden`.
 - Vercel: set `SESSION_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `APP_BASE_URL` (same origin used in the browser). `AUTO_INIT_DB` defaults to false on Vercel, true locally. See `.env.example`.
 
