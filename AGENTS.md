@@ -6,16 +6,18 @@ Cortex: Flask + vanilla JS app para gestão de 1:1s e performance de time. Singl
 
 - Install deps: `uv sync` (Python >= 3.11; `uv.lock` is the lockfile)
 - Dev server: `python app.py` → http://localhost:5000 (debug mode, port 5000)
-- Production: `gunicorn app:app --bind 0.0.0.0:5000 --workers 4 --timeout 120`
+- Production: Vercel Flask preset loads `app.py:app`; `vercel.json` builds CDN assets via `scripts/build_static.py`. See `DEPLOY_VERCEL.md`.
+- Traditional server: `gunicorn app:app --bind 0.0.0.0:5000 --workers 4 --timeout 120`
+- Initialize schema explicitly: `uv run --env-file .env python -m cortex.init_db` (required before first Vercel deploy; no DDL at cold start).
 - Drop legacy tables: `python -m cortex.drop_legacy` (idempotent; requires DATABASE_URL)
-- No tests, lint, typecheck, or CI configured. Verification = booting the app and exercising endpoints manually (`/healthz` reports config/db status).
+- Tests: `python -m unittest discover -s tests -v` (mocked integrations). No lint, typecheck, or CI configured. Also boot the app and exercise endpoints; `/healthz` checks config/db status (200 ok, 503 degraded).
 
 ## Required environment
 
 - `DATABASE_URL`: Supabase Postgres URI — Transaction Pooler port **6543**, not 5432.
 - `OPENAI_API_KEY`: needed for all AI features (`gpt-4o-mini` extraction/cards, `gpt-4o` agenda).
 - `ALLOWED_EMAILS`: exact e-mails allowed to log in (comma-separated). `ALLOWED_EMAIL_DOMAINS`: domains allowed (default `totvs.com` when neither is set). OAuth callback redirects non-allowed users to `/login?error=forbidden`.
-- Optional: `SESSION_SECRET`, `GOOGLE_CLIENT_ID/SECRET`.
+- Vercel: set `SESSION_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `APP_BASE_URL` (same origin used in the browser). `AUTO_INIT_DB` defaults to false on Vercel, true locally. See `.env.example`.
 
 ## Architecture
 
@@ -33,6 +35,8 @@ Frontend: `static/` Alpine.js SPA with no build step (CDN). `/` serves `index.ht
 ## Gotchas
 
 - Startup is resilient BY DESIGN: missing DB/OpenAI keys never crash import or boot; they surface as errors at request time and in `/healthz` (`status: degraded`). Do not reintroduce import-time raises.
+- Vercel uses `NullPool` against the Supabase Transaction Pooler. `/healthz` is read-only; schema changes run through `python -m cortex.init_db`. A missing production `SESSION_SECRET` blocks API requests with 503, keeping pages and diagnostics available.
+- `static/` is the source of frontend assets. The build copies css/js/images to generated, gitignored `public/static/` for the Vercel CDN. HTML stays served by Flask; preserve `/static/...` URLs.
 - No migrations framework: schema changes go into `_NEW_DDL`/`_EVOLUTION_DDL` lists in `database.py`.
 - Date parsing in PUT endpoints must happen inside try/except ValueError → return 400 (three bugs of this class were fixed already).
 - Alpine's `x-show` removes the inline display property when showing an element — never rely on inline `style="display:flex"` for modals; use `.modal.open { display:flex }` CSS + `:class="{open: state}"` instead.

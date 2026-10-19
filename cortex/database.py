@@ -4,12 +4,15 @@ import threading
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 log = logging.getLogger("cortex.db")
 
 # Status da última tentativa de inicialização do banco (para /healthz)
-# Valores: None (não executado), 'ok', 'unconfigured', 'error:<msg>'
+# Valores: None (não executado), 'ok', 'unconfigured', 'error'.
+# Não inclui mensagens de exceção, pois o status pode ser exposto pelo /healthz.
 INIT_DB_STATUS = None
 
 _engine = None
@@ -31,9 +34,19 @@ def get_engine():
                 if not url:
                     raise RuntimeError(
                         "DATABASE_URL não configurada. "
-                        "Defina o Secret no Replit (Transaction Pooler do Supabase, porta 6543)."
+                        "Defina a variável de ambiente com a URL do Transaction Pooler "
+                        "do Supabase, porta 6543."
                     )
-                _engine = create_engine(url, pool_pre_ping=True, pool_recycle=3600)
+                options = {"pool_pre_ping": True}
+                if make_url(url).get_backend_name() == "postgresql":
+                    options["connect_args"] = {"connect_timeout": 10}
+                if os.environ.get("VERCEL") == "1":
+                    # O Supabase já mantém o pool. Instâncias serverless não
+                    # devem reter conexões ociosas depois de cada requisição.
+                    options["poolclass"] = NullPool
+                else:
+                    options["pool_recycle"] = 3600
+                _engine = create_engine(url, **options)
                 _SessionLocal = sessionmaker(bind=_engine)
     return _engine
 
@@ -215,37 +228,65 @@ _EVOLUTION_DDL = [
 ]
 
 
+def check_database():
+    """Verifica conectividade e schema sem DDL nem leitura de dados pessoais.
+
+    Executado sob demanda pelo /healthz, inclusive quando AUTO_INIT_DB está
+    desativado. O retorno contém apenas estados seguros para exposição pública.
+    """
+    if not database_url():
+        return "unconfigured"
+    try:
+        with get_engine().connect() as conn:
+            conn.execute(text("SELECT 1"))
+            # WHERE FALSE valida tabelas/colunas sem consultar registros.
+            conn.execute(text("""
+                SELECT users.id, people.id, one_on_ones.extraction_json,
+                       commitments.id, checkpoints.id, card_jobs.progress_json,
+                       member_cards.id, connections.id
+                FROM users, people, one_on_ones, commitments, checkpoints,
+                     card_jobs, member_cards, connections
+                WHERE FALSE
+            """))
+        return "ok"
+    except Exception as exc:
+        sqlstate = getattr(getattr(exc, "orig", exc), "pgcode", None)
+        if sqlstate in {"42P01", "42703"}:  # undefined_table / undefined_column
+            return "schema_missing"
+        log.warning("Verificação do banco falhou (%s).", type(exc).__name__)
+        return "error"
+
+
 def init_db():
-    """Executa o DDL evolutivo. Nunca levanta exceção para cima: registra o
-    status em INIT_DB_STATUS e permite que a aplicação suba mesmo se o banco
-    estiver temporariamente indisponível (resiliência no Autoscale do Replit).
+    """Executa o DDL evolutivo e retorna se todas as etapas foram concluídas.
+
+    Registra INIT_DB_STATUS sem interromper o boot quando há indisponibilidade.
+    Na Vercel, execute explicitamente com ``python -m cortex.init_db`` antes
+    do deploy; a aplicação não precisa alterar o schema em cada cold start.
     """
     global INIT_DB_STATUS
+    if not database_url():
+        INIT_DB_STATUS = "unconfigured"
+        log.warning("DATABASE_URL não configurada; schema não inicializado.")
+        return False
+
     try:
         engine = get_engine()
-    except Exception as e:
-        INIT_DB_STATUS = f"unconfigured:{e}"
-        log.warning(f"Banco indisponível no startup: {e}")
-        return
-
-    with engine.connect() as conn:
-        for ddl, name in _AUTH_DDL + _NEW_DDL:
-            try:
-                conn.execute(text(ddl))
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                log.error(f"DDL '{name}' falhou: {e}")
-                INIT_DB_STATUS = f"error:{name}:{e}"
-                return
-
-        for ddl, name in _EVOLUTION_DDL:
-            try:
-                conn.execute(text(ddl))
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                log.warning(f"Evolução '{name}' pulada: {e}")
+        with engine.connect() as conn:
+            for ddl, name in _AUTH_DDL + _NEW_DDL + _EVOLUTION_DDL:
+                try:
+                    conn.execute(text(ddl))
+                    conn.commit()
+                except Exception as exc:
+                    conn.rollback()
+                    log.error("DDL '%s' falhou (%s).", name, type(exc).__name__)
+                    INIT_DB_STATUS = "error"
+                    return False
+    except Exception as exc:
+        INIT_DB_STATUS = "error"
+        log.warning("Banco indisponível para inicialização (%s).", type(exc).__name__)
+        return False
 
     INIT_DB_STATUS = "ok"
     log.info("Schema verificado/atualizado com sucesso.")
+    return True

@@ -12,11 +12,13 @@ def get_client():
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise RuntimeError(
-                "OPENAI_API_KEY não configurada. Defina o Secret no Replit."
+                "OPENAI_API_KEY não configurada. Defina a variável de ambiente na hospedagem."
             )
         from openai import OpenAI
 
-        _client = OpenAI(api_key=api_key)
+        # A agenda pode executar duas chamadas de IA na mesma requisição.
+        # Limites explícitos deixam margem para Gmail e banco na função Vercel.
+        _client = OpenAI(api_key=api_key, timeout=60.0, max_retries=0)
     return _client
 
 

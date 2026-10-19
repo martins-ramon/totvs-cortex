@@ -7,10 +7,13 @@ venv/
 # Ambiente / segredos
 .env
 .env.*
+!.env.example
 
 # Ferramentas
 .DS_Store
 *.log
+.vercel/
+public/static/
 
 # Replit
 .replit_user_cache/

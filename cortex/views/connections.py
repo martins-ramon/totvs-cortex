@@ -3,7 +3,6 @@
 Gmail e Google Agenda usam OAuth somente para leitura.
 Slack e Drive aparecem como "em breve".
 """
-import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -13,6 +12,7 @@ from sqlalchemy import text
 
 from ..database import session_factory
 from ..security import login_required
+from ..oauth import HTTP_TIMEOUT, callback_url, google_credentials
 from .. import gmail as gmail_svc
 from .. import calendar as calendar_svc
 
@@ -26,8 +26,7 @@ GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 def _google_creds():
     """Credenciais OAuth lidas em tempo de chamada (permite configurar
     os Secrets sem reiniciar o processo e facilita testes)."""
-    return (os.environ.get("GOOGLE_CLIENT_ID"),
-            os.environ.get("GOOGLE_CLIENT_SECRET"))
+    return google_credentials()
 
 # Só leitura da caixa. Não misturar com openid do login — senão o Google
 # devolve um token incremental sem gmail.readonly (403 em threads.list).
@@ -67,7 +66,7 @@ TOOLS = [
 
 
 def _redirect_uri(tool_id="gmail"):
-    return request.host_url.replace('http://', 'https://').rstrip('/') + f"/api/connections/{tool_id}/callback"
+    return callback_url(f"/api/connections/{tool_id}/callback")
 
 
 @bp.route('/connections', methods=['GET'])
@@ -107,7 +106,12 @@ def connect_start(tool_id):
         return jsonify({"error": "Integração ainda não disponível."}), 400
     client_id, client_secret = _google_creds()
     if not client_id or not client_secret:
-        return jsonify({"error": "Google OAuth não configurado (Secrets ausentes)."}), 500
+        return jsonify({"error": "Google OAuth não configurado (variáveis de ambiente ausentes)."}), 503
+
+    try:
+        redirect_uri = _redirect_uri(tool_id)
+    except ValueError:
+        return jsonify({"error": "APP_BASE_URL inválida. Configure a origem pública da aplicação."}), 503
 
     if tool_id in ("gmail", "calendar"):
         db = session_factory()
@@ -126,7 +130,7 @@ def connect_start(tool_id):
             "response_type": "code",
             "access_type": "offline",
             "prompt": "consent",
-            "redirect_uri": _redirect_uri(tool_id),
+            "redirect_uri": redirect_uri,
             "state": session[state_key],
             "login_hint": user_email[0] if user_email else None,
         }).prepare().url
@@ -145,23 +149,32 @@ def gmail_callback():
     error = request.args.get('error')
     code = request.args.get('code')
     state = request.args.get('state')
+    expected_state = session.pop('conn_state', None)
 
+    if not state or not expected_state or not secrets.compare_digest(state, expected_state):
+        return redirect('/connections?error=invalid_state')
     if error == 'access_denied':
         return redirect('/connections?error=gmail_denied')
-    if not code or not state or state != session.get('conn_state'):
-        return redirect('/connections?error=invalid_state')
-    session.pop('conn_state', None)
+    if not code:
+        return redirect('/connections?error=token_exchange_failed')
 
-    cfg = requests.get(GOOGLE_DISCOVERY_URL).json()
     client_id, client_secret = _google_creds()
-    token_response = requests.post(cfg["token_endpoint"], data={
-        "code": code,
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "redirect_uri": _redirect_uri(),
-        "grant_type": "authorization_code",
-    }, headers={"Content-Type": "application/x-www-form-urlencoded"})
-    tokens = token_response.json()
+    try:
+        redirect_uri = _redirect_uri()
+        discovery_response = requests.get(GOOGLE_DISCOVERY_URL, timeout=HTTP_TIMEOUT)
+        discovery_response.raise_for_status()
+        cfg = discovery_response.json()
+        token_response = requests.post(cfg["token_endpoint"], data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=HTTP_TIMEOUT)
+        token_response.raise_for_status()
+        tokens = token_response.json()
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return redirect('/connections?error=token_exchange_failed')
 
     access_token = tokens.get('access_token')
     if not access_token:
@@ -301,7 +314,8 @@ def disconnect(tool_id):
             try:
                 requests.post("https://oauth2.googleapis.com/revoke",
                               data={"token": row[0]},
-                              headers={"Content-Type": "application/x-www-form-urlencoded"})
+                              headers={"Content-Type": "application/x-www-form-urlencoded"},
+                              timeout=HTTP_TIMEOUT)
             except Exception as e:
                 print(f"Aviso: falha ao revogar token no Google: {e}")
 

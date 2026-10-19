@@ -1,4 +1,3 @@
-import os
 import secrets
 
 import requests
@@ -9,11 +8,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from ..database import session_factory
 from .. import ai
 from ..security import email_allowed, login_required
+from ..oauth import HTTP_TIMEOUT, callback_url, google_credentials
 
 bp = Blueprint("auth", __name__, url_prefix="/api")
 
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
-GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
 GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
 
 
@@ -22,7 +20,13 @@ def hash_password(password):
 
 
 def get_google_provider_cfg():
-    return requests.get(GOOGLE_DISCOVERY_URL).json()
+    response = requests.get(GOOGLE_DISCOVERY_URL, timeout=HTTP_TIMEOUT)
+    response.raise_for_status()
+    return response.json()
+
+
+def _google_creds():
+    return google_credentials()
 
 
 # --- AUTENTICAÇÃO LOCAL (legado, agora restrito pela allowlist) ---
@@ -146,19 +150,22 @@ def google_link():
 
 
 def _start_google_flow():
-    if not GOOGLE_CLIENT_ID:
-        return jsonify({"error": "Google Client ID not configured"}), 500
+    client_id, client_secret = _google_creds()
+    if not client_id or not client_secret:
+        return jsonify({"error": "Google OAuth não configurado."}), 503
+
+    try:
+        redirect_uri = callback_url("/api/auth/google/callback")
+        google_provider_cfg = get_google_provider_cfg()
+        authorization_endpoint = google_provider_cfg["authorization_endpoint"]
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return jsonify({"error": "Não foi possível iniciar o login com Google. Verifique a configuração e tente novamente."}), 503
 
     state = secrets.token_urlsafe(16)
     session['oauth_state'] = state
 
-    google_provider_cfg = get_google_provider_cfg()
-    authorization_endpoint = google_provider_cfg["authorization_endpoint"]
-
-    redirect_uri = request.host_url.replace('http://', 'https://').rstrip('/') + "/api/auth/google/callback"
-
     request_uri = requests.Request('GET', authorization_endpoint, params={
-        "client_id": GOOGLE_CLIENT_ID,
+        "client_id": client_id,
         "access_type": "offline",
         "scope": "openid email profile",
         "response_type": "code",
@@ -174,36 +181,45 @@ def google_callback():
     """Recebe o retorno do Google, troca o code por token e loga/registra o usuário."""
     code = request.args.get("code")
     state = request.args.get("state")
+    expected_state = session.pop('oauth_state', None)
 
-    if state != session.get('oauth_state'):
-        return jsonify({"error": "Invalid state parameter"}), 400
+    if not state or not expected_state or not secrets.compare_digest(state, expected_state):
+        return jsonify({"error": "Sessão de autenticação inválida. Inicie o login novamente."}), 400
+    if request.args.get('error') or not code:
+        return redirect('/login?error=session_expired')
 
-    google_provider_cfg = get_google_provider_cfg()
-    token_endpoint = google_provider_cfg["token_endpoint"]
+    client_id, client_secret = _google_creds()
+    if not client_id or not client_secret:
+        return jsonify({"error": "Google OAuth não configurado."}), 503
+    try:
+        redirect_uri = callback_url("/api/auth/google/callback")
+        google_provider_cfg = get_google_provider_cfg()
+        token_response = requests.post(
+            google_provider_cfg["token_endpoint"],
+            data={
+                "code": code,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=HTTP_TIMEOUT,
+        )
+        token_response.raise_for_status()
+        tokens = token_response.json()
+        userinfo_response = requests.get(
+            google_provider_cfg["userinfo_endpoint"],
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            timeout=HTTP_TIMEOUT,
+        )
+        userinfo_response.raise_for_status()
+        user_info = userinfo_response.json()
+        google_id = user_info["sub"]
+        email = user_info["email"]
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return jsonify({"error": "Não foi possível concluir o login com Google. Tente novamente."}), 502
 
-    token_response = requests.post(
-        token_endpoint,
-        data={
-            "code": code,
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uri": request.host_url.replace('http://', 'https://').rstrip('/') + "/api/auth/google/callback",
-            "grant_type": "authorization_code",
-        },
-        headers={"Content-Type": "application/x-www-form-urlencoded"}
-    )
-
-    tokens = token_response.json()
-
-    userinfo_endpoint = google_provider_cfg["userinfo_endpoint"]
-    userinfo_response = requests.get(userinfo_endpoint, headers={"Authorization": f"Bearer {tokens['access_token']}"})
-
-    if userinfo_response.status_code != 200:
-        return jsonify({"error": "Failed to get user info"}), 400
-
-    user_info = userinfo_response.json()
-    google_id = user_info["sub"]
-    email = user_info["email"]
     name = user_info.get("name", email.split('@')[0])
 
     mode = session.get('oauth_mode', 'login')

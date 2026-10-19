@@ -8,6 +8,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from html import unescape
+from time import monotonic
 
 import requests
 from sqlalchemy import text
@@ -20,9 +21,19 @@ GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 _MAX_THREADS = 10
 _BODY_LIMIT = 900
 _NEWER_THAN = "90d"
+_SCAN_TIMEOUT = 60.0
 
 # Evita repetir threads.list 403 para cada pessoa do mesmo job/processo.
 _AUTH_SKIP = {}
+
+
+def _request_timeout(deadline, maximum):
+    if deadline is None:
+        return maximum
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise requests.Timeout("Tempo limite da consulta ao Gmail excedido.")
+    return min(maximum, remaining)
 
 
 def _aware(dt):
@@ -112,33 +123,40 @@ def _skip_for_google_error(status_code, reason):
     return "erro"
 
 
-def token_has_gmail_scope(access_token):
+def token_has_gmail_scope(access_token, deadline=None):
     if not access_token:
         return False
     try:
-        r = requests.get(TOKENINFO_URL, params={"access_token": access_token}, timeout=10)
+        r = requests.get(TOKENINFO_URL, params={"access_token": access_token},
+                         timeout=_request_timeout(deadline, 10))
         data = r.json() if r.ok else {}
         scopes = (data.get("scope") or "").split()
         return GMAIL_READONLY in scopes or "https://mail.google.com/" in scopes
+    except requests.Timeout:
+        raise
     except Exception as e:
         print(f"Gmail: falha no tokeninfo: {e}")
         return True
 
 
-def _refresh_access_token(refresh_token):
+def _refresh_access_token(refresh_token, deadline=None):
     client_id = os.environ.get("GOOGLE_CLIENT_ID")
     client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
     if not client_id or not client_secret or not refresh_token:
         return None
     try:
-        cfg = requests.get(GOOGLE_DISCOVERY_URL, timeout=15).json()
+        cfg = requests.get(GOOGLE_DISCOVERY_URL,
+                           timeout=_request_timeout(deadline, 15)).json()
         resp = requests.post(cfg["token_endpoint"], data={
             "client_id": client_id,
             "client_secret": client_secret,
             "refresh_token": refresh_token,
             "grant_type": "refresh_token",
-        }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=20)
+        }, headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=_request_timeout(deadline, 20))
         data = resp.json()
+    except requests.Timeout:
+        raise
     except Exception as e:
         print(f"Gmail: falha ao renovar token: {e}")
         return None
@@ -162,7 +180,7 @@ def _mark_needs_reauth(db, user_id):
         print(f"Gmail: falha ao marcar needs_reauth: {e}")
 
 
-def get_access_token(db, user_id, force_refresh=False):
+def get_access_token(db, user_id, force_refresh=False, deadline=None):
     """Devolve access_token válido ou None se Gmail não estiver conectado."""
     row = db.execute(text("""
         SELECT access_token, refresh_token, expires_at, status
@@ -180,7 +198,7 @@ def get_access_token(db, user_id, force_refresh=False):
     if fresh and not force_refresh:
         return access
 
-    refreshed = _refresh_access_token(refresh)
+    refreshed = _refresh_access_token(refresh, deadline=deadline)
     if not refreshed:
         return access if (fresh and access) else None
     new_access, new_exp, _granted = refreshed
@@ -193,26 +211,28 @@ def get_access_token(db, user_id, force_refresh=False):
     return new_access
 
 
-def _auth_get(url, token, params=None):
+def _auth_get(url, token, params=None, deadline=None):
     return requests.get(
         url,
         headers={"Authorization": f"Bearer {token}"},
         params=params or {},
-        timeout=20,
+        timeout=_request_timeout(deadline, 20),
     )
 
 
-def search_person_threads(access_token, person_email):
+def search_person_threads(access_token, person_email, deadline=None):
     """Busca threads recentes em que o e-mail do participante aparece."""
     email = (person_email or "").strip().lower()
     if not email:
         return []
+    if deadline is None:
+        deadline = monotonic() + _SCAN_TIMEOUT
 
     query = f"from:{email} OR to:{email} OR cc:{email} newer_than:{_NEWER_THAN}"
     listed = _auth_get(GMAIL_THREADS_URL, access_token, {
         "q": query,
         "maxResults": _MAX_THREADS,
-    })
+    }, deadline=deadline)
     if listed.status_code >= 400:
         reason, message = _parse_google_error(listed)
         print(f"Gmail threads.list HTTP {listed.status_code} ({reason}): {message}")
@@ -227,7 +247,8 @@ def search_person_threads(access_token, person_email):
         tid = t.get("id")
         if not tid:
             continue
-        got = _auth_get(f"{GMAIL_THREADS_URL}/{tid}", access_token, {"format": "full"})
+        got = _auth_get(f"{GMAIL_THREADS_URL}/{tid}", access_token, {"format": "full"},
+                        deadline=deadline)
         if got.status_code >= 400:
             continue
         data = got.json() or {}
@@ -271,6 +292,7 @@ def scan_person_inbox(db, user_id, person_email, job_id=None):
     Nunca levanta: erros viram skipped.
     """
     email = (person_email or "").strip().lower()
+    deadline = monotonic() + _SCAN_TIMEOUT
     if not email:
         return {"scanned": False, "skipped": "sem_email", "threads": [], "thread_count": 0}
 
@@ -285,7 +307,7 @@ def scan_person_inbox(db, user_id, person_email, job_id=None):
         return {"scanned": False, "skipped": skipped, "threads": [], "thread_count": 0}
 
     try:
-        token = get_access_token(db, user_id)
+        token = get_access_token(db, user_id, deadline=deadline)
     except Exception as e:
         print(f"Gmail: erro ao obter token: {e}")
         return _fail("erro")
@@ -293,22 +315,26 @@ def scan_person_inbox(db, user_id, person_email, job_id=None):
     if not token:
         return _fail("gmail_nao_conectado")
 
-    if not token_has_gmail_scope(token):
-        token = get_access_token(db, user_id, force_refresh=True) or token
-        if not token_has_gmail_scope(token):
-            print("Gmail: token sem escopo gmail.readonly — reconecte em Conexões.")
-            _mark_needs_reauth(db, user_id)
-            return _fail("gmail_sem_permissao")
-
     try:
-        threads = search_person_threads(token, email)
+        if not token_has_gmail_scope(token, deadline=deadline):
+            token = get_access_token(db, user_id, force_refresh=True, deadline=deadline) or token
+            if not token_has_gmail_scope(token, deadline=deadline):
+                print("Gmail: token sem escopo gmail.readonly — reconecte em Conexões.")
+                _mark_needs_reauth(db, user_id)
+                return _fail("gmail_sem_permissao")
+
+        threads = search_person_threads(token, email, deadline=deadline)
     except RuntimeError as e:
         skipped = e.args[1] if len(e.args) > 1 else "erro"
         if skipped in ("gmail_sem_permissao", "erro"):
-            retry = get_access_token(db, user_id, force_refresh=True)
+            try:
+                retry = get_access_token(db, user_id, force_refresh=True, deadline=deadline)
+            except Exception as refresh_error:
+                print(f"Gmail: falha ao renovar token de {email}: {refresh_error}")
+                return _fail("erro")
             if retry and retry != token:
                 try:
-                    threads = search_person_threads(retry, email)
+                    threads = search_person_threads(retry, email, deadline=deadline)
                 except RuntimeError as e2:
                     skipped = e2.args[1] if len(e2.args) > 1 else skipped
                     if skipped == "gmail_sem_permissao":

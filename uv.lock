@@ -625,7 +625,7 @@ wheels = [
 ]
 
 [[package]]
-name = "repl-nix-workspace"
+name = "totvs-cortex"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

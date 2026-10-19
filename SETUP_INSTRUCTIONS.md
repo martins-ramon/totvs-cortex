@@ -1,59 +1,46 @@
-# 🔧 Instruções de Configuração - FeedbackAI
+# Configuração do Supabase — Cortex
 
-## ⚠️ Problema de Conexão com Supabase Detectado
+Para a migração completa, siga [DEPLOY_VERCEL.md](DEPLOY_VERCEL.md).
 
-Sua conexão Supabase está usando **porta 5432** (conexão direta), que pode não funcionar no Replit devido a restrições de firewall.
+## Conexão
 
-## ✅ Solução: Use Transaction Pooler (Porta 6543)
+1. Abra o projeto existente no [Supabase Dashboard](https://supabase.com/dashboard/projects).
+2. Em **Connect**, selecione **Transaction pooler** e copie a URI PostgreSQL, porta **6543**.
+3. Substitua a senha pelo valor real, codificando caracteres especiais na URI, e use `sslmode=require`.
+4. Cadastre a URI como `DATABASE_URL` em **Vercel → Project Settings → Environment Variables → Production**.
 
-### Passo a Passo para Corrigir:
+Formato ilustrativo (copie o host real do painel):
 
-1. **Acesse seu Supabase Dashboard**
-   - Vá para: https://supabase.com/dashboard/projects
+```text
+postgresql://postgres.PROJECT_REF:SENHA_URL_ENCODED@aws-0-REGIAO.pooler.supabase.com:6543/postgres?sslmode=require
+```
 
-2. **Selecione seu Projeto**
+Reutilizar o mesmo projeto Supabase mantém pessoas, reuniões, combinados, checkpoints, cards, fotos e conexões Google. A Vercel hospeda a aplicação; ela não copia ou substitui o banco.
 
-3. **Clique no botão "Connect"** (topo da página)
+Se a origem real for um banco do Replit, será necessário exportar e restaurar esse banco no Supabase antes da troca. Trocar apenas a URI por um banco vazio não transfere dados.
 
-4. **IMPORTANTE: Selecione "Transaction pooler"**
-   - NÃO use "Direct connection"
-   - Transaction pooler usa porta 6543 ✅
-   - Direct connection usa porta 5432 ❌ (não funciona no Replit)
+## Schema
 
-5. **Copie a Connection String**
-   - Escolha "URI" 
-   - Vai parecer com: `postgresql://postgres.[project]:[password]@aws-0-us-east-1.pooler.supabase.com:6543/postgres`
-   - Note a porta **6543** na URL
+A Vercel não executa DDL automaticamente. Com `.env` preenchido e apontando para o banco correto, execute uma vez antes do primeiro deploy e quando houver mudanças de schema:
 
-6. **Atualize o Secret DATABASE_URL**
-   - Vá em Tools → Secrets no Replit
-   - Edite DATABASE_URL com a nova connection string
-   - Certifique-se de substituir `[YOUR-PASSWORD]` pela sua senha real
+```bash
+uv sync --locked
+uv run --env-file .env python -m cortex.init_db
+```
 
-7. **Reinicie o servidor**
-   - Clique em "Stop" e depois "Run" novamente
+O comando cria tabelas/colunas ausentes e retorna código 0 em caso de sucesso; não apaga dados existentes. Não execute `cortex.drop_legacy` como parte da migração de hospedagem. Faça um backup antes de qualquer alteração no banco.
 
-## 🔄 Alternativa: Usar Database do Replit
+## Diagnóstico
 
-Se você preferir não usar Supabase:
+`/healthz` consulta o banco sem escrever nele. O campo `database` pode ser:
 
-1. No painel do Replit, vá em **Tools → Database**
-2. Clique em **Create a PostgreSQL Database**
-3. O Replit vai configurar automaticamente o DATABASE_URL
-4. Reinicie o servidor
+| Estado | Ação |
+|---|---|
+| `ok` | Conexão e schema básico disponíveis |
+| `unconfigured` | Configure `DATABASE_URL` |
+| `schema_missing` | Execute a inicialização explícita no banco correto |
+| `error` | Confira senha, host, porta, SSL e disponibilidade/restrições de rede no Supabase |
 
-Esta opção é mais simples e funciona imediatamente!
+`db_init: skipped` é esperado na Vercel. O estado geral só será `ok` quando as demais configurações obrigatórias também estiverem presentes. Credenciais de Google/OpenAI são verificadas quanto à presença, sem chamadas pagas nem teste de autorização externa.
 
-## 📋 Verificar Configuração
-
-Após atualizar, verifique se:
-- ✅ DATABASE_URL contém porta **6543** (pooler) ou é do Replit
-- ✅ OPENAI_API_KEY está configurado
-- ✅ Servidor inicia sem erros de conexão
-
-## 🆘 Ainda com Problemas?
-
-Se continuar com erros:
-1. Verifique se a senha na connection string está correta
-2. Certifique-se de que não há espaços extras na URL
-3. Confirme que o projeto Supabase está ativo
+Referência: [Supabase — Connecting to Postgres](https://supabase.com/docs/guides/database/connecting-to-postgres).

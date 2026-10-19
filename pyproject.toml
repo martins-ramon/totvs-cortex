@@ -1,5 +1,5 @@
 [project]
-name = "repl-nix-workspace"
+name = "totvs-cortex"
 version = "0.1.0"
 description = "Cortex — copiloto de gestão 1:1 e performance de times"
 requires-python = ">=3.11"

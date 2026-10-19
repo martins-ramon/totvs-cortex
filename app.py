@@ -1,6 +1,6 @@
 from cortex import create_app
 
-# Instância no nível do módulo para o Gunicorn (`gunicorn app:app`)
+# Entrypoint WSGI detectado pela Vercel e compatível com `gunicorn app:app`.
 app = create_app()
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@ import logging
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
+from time import monotonic
 from zoneinfo import ZoneInfo
 
 import requests
@@ -13,6 +14,7 @@ READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly"
 EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 LOOKAHEAD_DAYS = 90
+_SCAN_TIMEOUT = 60.0
 _ONE_ON_ONE = re.compile(
     r"(?<!\w)(?:1\s*[:x/\-]\s*1|1\s*on\s*1|one[\s-]+(?:on|to)[\s-]+one|"
     r"um[\s-]+a[\s-]+um)(?!\w)", re.IGNORECASE,
@@ -25,6 +27,13 @@ class CalendarUnavailable(Exception):
         super().__init__(status)
 
 
+def _request_timeout(deadline):
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise requests.Timeout("Tempo limite da consulta ao Google Agenda excedido.")
+    return min(15.0, remaining)
+
+
 def _needs_reauth(db, user_id):
     db.execute(text("""
         UPDATE connections SET status = 'needs_reauth', updated_at = CURRENT_TIMESTAMP
@@ -34,7 +43,7 @@ def _needs_reauth(db, user_id):
     raise CalendarUnavailable("needs_reauth")
 
 
-def _access_token(db, user_id, connection, force_refresh=False):
+def _access_token(db, user_id, connection, force_refresh=False, deadline=None):
     access, refresh, expires_at, status, scopes, _account = connection
     if status != "connected" or READONLY_SCOPE not in (scopes or "").split():
         _needs_reauth(db, user_id)
@@ -52,7 +61,7 @@ def _access_token(db, user_id, connection, force_refresh=False):
     response = requests.post(TOKEN_URL, data={
         "client_id": client_id, "client_secret": client_secret,
         "refresh_token": refresh, "grant_type": "refresh_token",
-    }, timeout=15)
+    }, timeout=_request_timeout(deadline) if deadline is not None else 15)
     data = response.json()
     if data.get("error") == "invalid_grant":
         _needs_reauth(db, user_id)
@@ -132,6 +141,7 @@ def match_meetings(events, people, account_email, now, calendar_timezone):
 
 def upcoming_oneonones(db, user_id, people):
     result = {"status": "unavailable", "meetings": {}, "lookahead_days": LOOKAHEAD_DAYS}
+    deadline = monotonic() + _SCAN_TIMEOUT
     try:
         connection = db.execute(text("""
             SELECT access_token, refresh_token, expires_at, status, scopes, account_email
@@ -139,7 +149,7 @@ def upcoming_oneonones(db, user_id, people):
         """), {"uid": user_id}).fetchone()
         if not connection:
             return {**result, "status": "not_connected"}
-        token = _access_token(db, user_id, connection)
+        token = _access_token(db, user_id, connection, deadline=deadline)
         now = datetime.now(timezone.utc)
         params = {
             "timeMin": now.isoformat(),
@@ -152,12 +162,13 @@ def upcoming_oneonones(db, user_id, people):
         refreshed = False
         for _ in range(20):
             response = requests.get(EVENTS_URL, headers={"Authorization": f"Bearer {token}"},
-                                    params=params, timeout=15)
+                                    params=params, timeout=_request_timeout(deadline))
             if response.status_code == 401 and not refreshed:
-                token = _access_token(db, user_id, connection, force_refresh=True)
+                token = _access_token(db, user_id, connection, force_refresh=True,
+                                      deadline=deadline)
                 refreshed = True
                 response = requests.get(EVENTS_URL, headers={"Authorization": f"Bearer {token}"},
-                                        params=params, timeout=15)
+                                        params=params, timeout=_request_timeout(deadline))
             if response.status_code == 401:
                 _needs_reauth(db, user_id)
             if response.status_code == 403:
