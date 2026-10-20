@@ -48,34 +48,36 @@
                     </svg>
                 </button>
             </div>
-            <nav class="sidebar-nav">
-                <a href="#" class="nav-item" :class="{active: view==='dashboard'}" @click.prevent="go('dashboard')" title="Início">
+            <nav class="sidebar-nav" aria-label="Navegação principal">
+                <a href="#" class="nav-item" :class="{active: view==='dashboard'}" @click.prevent="go('dashboard')" title="Início" aria-label="Início">
                     <span class="nav-icon">📊</span>
                     <span class="nav-label">Início</span>
                 </a>
-                <a href="#" class="nav-item" :class="{active: view==='people' || view==='person'}" @click.prevent="go('people')" title="Meu Time">
+                <a href="#" class="nav-item" :class="{active: view==='people' || view==='person'}" @click.prevent="go('people')" title="Meu Time" aria-label="Meu Time">
                     <span class="nav-icon">👥</span>
                     <span class="nav-label">Meu Time</span>
                 </a>
-                <a href="#" class="nav-item" :class="{active: view==='prep'}" @click.prevent="go('prep')" title="Preparar 1:1">
+                <a href="#" class="nav-item" :class="{active: view==='prep'}" @click.prevent="go('prep')" title="Preparar 1:1" aria-label="Preparar 1:1">
                     <span class="nav-icon">🧭</span>
                     <span class="nav-label">Preparar 1:1</span>
                 </a>
-                <a href="#" class="nav-item" :class="{active: view==='cards'}" @click.prevent="goCards()" title="Cards do Time">
+                <a href="#" class="nav-item" :class="{active: view==='cards'}" @click.prevent="goCards()" title="Cards do Time" aria-label="Cards do Time">
                     <span class="nav-icon">🗂️</span>
                     <span class="nav-label">Cards do Time</span>
                 </a>
-                <a href="#" class="nav-item" :class="{active: view==='connections'}" @click.prevent="goConnections()" title="Conexões">
+                <a href="#" class="nav-item" :class="{active: view==='connections'}" @click.prevent="goConnections()" title="Conexões" aria-label="Conexões">
                     <span class="nav-icon">🔗</span>
                     <span class="nav-label">Conexões</span>
                 </a>
             </nav>
             <div class="sidebar-footer">
                 <div class="user-info">
-                    <div class="user-avatar-placeholder" x-text="userInitials" :title="user ? user.name : ''"></div>
-                    <strong id="user-name-link" x-text="user ? user.name : ''"></strong>
-                    <small class="user-email" x-text="user ? user.email : ''"></small>
-                    <button class="btn-logout" @click="logout()" title="Sair">Sair</button>
+                    <div class="user-avatar-placeholder" x-text="userInitials" :title="user ? user.name + ' · ' + user.email : ''" aria-hidden="true"></div>
+                    <div class="user-details">
+                        <strong id="user-name-link" x-text="user ? user.name : ''" :title="user ? user.name : ''"></strong>
+                        <small class="user-email" x-text="user ? user.email : ''" :title="user ? user.email : ''"></small>
+                    </div>
+                    <button type="button" class="btn-logout" @click="logout()" title="Sair do sistema" aria-label="Sair do sistema">Sair</button>
                 </div>
             </div>
         </aside>

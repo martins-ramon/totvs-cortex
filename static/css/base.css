@@ -15,6 +15,7 @@ body {
 .app-container {
   display: flex;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .sidebar {
@@ -24,8 +25,13 @@ body {
   display: flex;
   flex-direction: column;
   box-shadow: 4px 0 24px rgba(0, 0, 0, 0.1);
-  position: relative; /* Necessário para o z-index funcionar corretamente */
-  z-index: 1000; /* ✅ CORREÇÃO: Define a camada da sidebar */
+  /* A conta acompanha a janela, independentemente da altura do conteúdo. */
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  height: 100dvh;
+  z-index: 100;
   flex-shrink: 0;
   overflow: hidden;
   transition: width 0.25s ease;
@@ -33,6 +39,7 @@ body {
 
 .main-content {
   flex: 1;
+  min-width: 0;
   padding: 2rem;
   overflow-y: auto;
 }
@@ -134,6 +141,7 @@ body {
 
 .btn-logout {
   width: 100%;
+  min-height: 44px;
   padding: 0.625rem;
   background: rgba(239, 68, 68, 0.1);
   color: #EF4444;
@@ -196,6 +204,14 @@ body {
   .sidebar,
   .sidebar.collapsed {
       width: 100%;
+      height: auto;
+      align-self: stretch;
+  }
+  .main-content {
+      padding: 1.25rem;
+  }
+  .main-content :is(a, button, input, select, textarea, [tabindex]) {
+      scroll-margin-top: 9rem;
   }
 }
 
