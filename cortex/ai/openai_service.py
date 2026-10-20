@@ -55,6 +55,9 @@ Extraia as informações em JSON válido, em português do Brasil. Regras:
 - "conquistas": entregas, aprendizados e vitórias recentes a reconhecer.
 
 Não invente informação ausente; prefira listas vazias a conjecturas.
+Os nomes com variantes cadastradas já foram corrigidos na transcrição. Preserve sua
+grafia em todos os campos. Uma pessoa citada pode ser um terceiro, não o participante
+do 1:1. Não adivinhe identidades nem atribua falas ou combinados a outro participante.
 
 Transcrição:
 {transcript}"""

@@ -361,6 +361,7 @@
                                             </div>
                                         </template>
                                         <div class="btn-row" style="margin-top:0.9rem; margin-bottom:0;">
+                                            <button class="btn-small btn-edit" @click="viewSession(s.id)">Ver transcrição e insights</button>
                                             <button class="btn-small btn-edit" @click="openEditSession(s)">✏️ Editar</button>
                                             <button class="btn-small btn-delete" @click="deleteSession(s)">🗑️ Excluir</button>
                                         </div>
@@ -815,6 +816,11 @@
                 <div class="form-group"><label>Início na função</label><input class="form-control" x-model="personForm.hired_at" type="date"></div>
             </div>
             <div class="form-group"><label>Anotações</label><textarea class="form-control" rows="2" x-model="personForm.notes" placeholder="Contexto geral, área de atuação…"></textarea></div>
+            <div class="form-group">
+                <label for="person-transcript-aliases">Grafias do nome nas transcrições</label>
+                <textarea id="person-transcript-aliases" class="form-control" rows="3" x-model="personTranscriptAliasesInput" placeholder="Ex.: FORN&#10;FORNE"></textarea>
+                <small class="form-hint">Uma variante por linha, até 20. O nome completo será aplicado automaticamente na análise de qualquer 1:1 em que a pessoa for citada, preservando a transcrição original. Ajuste as variantes em Editar pessoa.</small>
+            </div>
             <button class="btn-primary btn-inline" @click="savePerson()" :disabled="savingPerson" :aria-busy="savingPerson">
                 <span x-show="!savingPerson">Salvar</span>
                 <span class="btn-busy" x-show="savingPerson"><span class="spinner spinner-sm" aria-hidden="true"></span>Salvando</span>
@@ -841,6 +847,7 @@
                 <label>Transcrição do Google Meet</label>
                 <textarea class="form-control mono" rows="10" x-model="sessionForm.transcript_raw" placeholder="Cole aqui a transcrição (Meet → Atividades → Transcrição). A IA extrai resumo, combinados e pontos de atenção. Se alterar uma transcrição existente, os insights serão refeitos automaticamente."></textarea>
                 <small class="form-hint">Dica: no Google Meet, abra "Atividades → Transcrição" e copie o texto completo.</small>
+                <small class="form-hint">Para corrigir nomes automaticamente na análise, cadastre as grafias que o Meet usa em Meu Time → Editar pessoa → Grafias do nome nas transcrições. O texto original é preservado.</small>
             </div>
             <button class="btn-primary btn-inline" @click="saveSession()" :disabled="savingSession" :aria-busy="savingSession">
                 <span x-show="!savingSession" x-text="editingSessionId ? 'Salvar alterações' : 'Salvar 1:1'"></span>
@@ -859,8 +866,8 @@
                     <p class="form-hint" x-text="'Pessoa: ' + personName(sessionDetail.person_id)"></p>
 
                     <div class="btn-row">
-                        <button class="btn-ai-action" @click="extractSession()" :disabled="extracting" :aria-busy="extracting">
-                            <span x-show="!extracting">✨ Extrair insights com IA</span>
+                        <button class="btn-ai-action" @click="extractSession()" :disabled="extracting || !sessionDetail.transcript_raw" :aria-busy="extracting">
+                            <span x-show="!extracting" x-text="sessionDetail.extraction ? '✨ Reextrair insights com IA' : '✨ Extrair insights com IA'"></span>
                             <span class="btn-busy" x-show="extracting"><span class="spinner spinner-sm" aria-hidden="true"></span>Analisando transcrição</span>
                         </button>
                         <span x-show="extracting" class="loading-inline">
@@ -868,6 +875,29 @@
                             A IA lê a transcrição e gera resumo, combinados e pontos de atenção
                         </span>
                     </div>
+                    <p class="form-hint" x-show="sessionDetail.extraction">A reextração refaz os insights e substitui os combinados abertos desta sessão. Combinados concluídos ou cancelados são preservados.</p>
+
+                    <template x-if="sessionDetail.transcript_normalization">
+                        <div>
+                            <p class="form-hint" role="status" x-show="sessionDetail.transcript_normalization.needs_reextraction" x-text="sessionDetail.transcript_raw ? 'A transcrição ou as correções de nomes mudaram desde a análise anterior. Reextraia os insights para aplicar as correções ao resumo e aos combinados. Depois, gere novamente os cards para atualizar a análise do time.' : 'A transcrição foi removida. Os insights ainda se referem ao texto anterior. Edite o 1:1 e adicione uma transcrição para refazer a análise.'"></p>
+                            <div class="panel" x-show="sessionDetail.transcript_normalization.corrections.length || sessionDetail.transcript_normalization.ambiguities.length">
+                                <h4>Correção de nomes</h4>
+                                <p class="form-hint">Prévia com as variações cadastradas no time. A análise usa esta versão e preserva a transcrição original.</p>
+                                <ul>
+                                    <template x-for="(c,i) in sessionDetail.transcript_normalization.corrections" :key="i">
+                                        <li><span x-text="c.original"></span> → <strong x-text="c.replacement"></strong> <span class="form-hint" x-text="'(' + c.count + ' ocorrência(s))'"></span></li>
+                                    </template>
+                                </ul>
+                                <template x-for="(a,i) in sessionDetail.transcript_normalization.ambiguities" :key="i">
+                                    <p class="form-hint"><strong x-text="a.original"></strong>: variação ambígua entre <span x-text="a.candidates.join(', ')"></span>. O texto foi mantido; ajuste as variações no cadastro ou edite a transcrição.</p>
+                                </template>
+                                <details class="transcript-details" x-show="sessionDetail.transcript_normalization.corrections.length">
+                                    <summary>Ver transcrição com nomes corrigidos</summary>
+                                    <pre class="transcript-box" x-text="sessionDetail.transcript_normalization.text"></pre>
+                                </details>
+                            </div>
+                        </div>
+                    </template>
 
                     <template x-if="sessionDetail.summary_ai">
                         <div class="panel">

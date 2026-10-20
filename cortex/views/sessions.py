@@ -9,6 +9,8 @@ from ..database import session_factory
 from .. import ai
 from .. import gmail as gmail_svc
 from ..security import login_required
+from ..transcripts import (load_transcript_people, normalize_transcript,
+                           normalization_metadata, transcript_preview)
 
 bp = Blueprint("sessions", __name__, url_prefix="/api")
 
@@ -138,7 +140,11 @@ def get_session(session_id):
         ).fetchone()
         if not row:
             return jsonify({"error": "Sessão não encontrada"}), 404
-        return jsonify({"session": _serialize_session(row, include_body=True)})
+        result = _serialize_session(row, include_body=True)
+        if row[5] or result['extraction']:
+            result['transcript_normalization'] = transcript_preview(
+                row[5], load_transcript_people(db) if row[5] else [], result['extraction'])
+        return jsonify({"session": result})
     finally:
         db.close()
 
@@ -267,13 +273,13 @@ def extract_session(session_id):
         if not row[5]:
             return jsonify({"error": "Sessão sem transcrição para extrair."}), 400
 
-        person = db.execute(
-            text("SELECT full_name FROM people WHERE id = :pid"), {"pid": row[1]}
-        ).fetchone()
-        person_name = person[0] if person else "Liderado"
+        people = load_transcript_people(db)
+        person_name = next((p['full_name'] for p in people if p['id'] == row[1]), 'Liderado')
+        normalized = normalize_transcript(row[5], people)
 
-        raw = ai.extract_meeting_insights(person_name, row[2].isoformat(), row[5])
+        raw = ai.extract_meeting_insights(person_name, row[2].isoformat(), normalized['text'])
         ext = _normalize_extraction(raw)
+        ext['transcript_normalization'] = normalization_metadata(normalized)
 
         db.execute(text("""
             UPDATE one_on_ones
@@ -309,8 +315,11 @@ def extract_session(session_id):
 
         updated = db.execute(text(_SESSION_SELECT + " WHERE id = :sid"),
                              {"sid": session_id}).fetchone()
-        return jsonify({"success": True,
-                        "session": _serialize_session(updated, include_body=True)})
+        result = _serialize_session(updated, include_body=True)
+        result['transcript_normalization'] = {
+            **normalized, 'needs_reextraction': False,
+        }
+        return jsonify({"success": True, "session": result})
     except Exception as e:
         db.rollback()
         print(f"Erro na extração IA da sessão {session_id}: {e}")

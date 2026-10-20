@@ -39,6 +39,7 @@ function cortexApp() {
         showPersonModal: false,
         editingPerson: null,
         personForm: {},
+        personTranscriptAliasesInput: '',
         savingPerson: false,
 
         showSessionModal: false,
@@ -606,6 +607,7 @@ function cortexApp() {
                 hired_at: p.hired_at || '',
                 notes: p.notes || ''
             } : { full_name: '', preferred_name: '', email: '', role_title: '', hired_at: '', notes: '' };
+            this.personTranscriptAliasesInput = (p?.transcript_aliases || []).join('\n');
             this.showPersonModal = true;
         },
         async savePerson() {
@@ -615,18 +617,21 @@ function cortexApp() {
                 showToast('Informe um e-mail válido.', 'warning');
                 return;
             }
+            const transcriptAliases = this.personTranscriptAliasesInput.split(/\r?\n/)
+                .map(alias => alias.trim()).filter(Boolean);
+            const payload = { ...this.personForm, transcript_aliases: transcriptAliases };
             this.savingPerson = true;
             try {
                 if (this.editingPerson) {
                     await this.api('/api/people/' + this.editingPerson.id, {
-                        method: 'PUT', body: JSON.stringify(this.personForm)
+                        method: 'PUT', body: JSON.stringify(payload)
                     });
                     showToast('Pessoa atualizada.', 'success');
                     if (this.currentPerson && this.currentPerson.id === this.editingPerson.id) {
-                        Object.assign(this.currentPerson, this.personForm);
+                        Object.assign(this.currentPerson, payload);
                     }
                 } else {
-                    await this.api('/api/people', { method: 'POST', body: JSON.stringify(this.personForm) });
+                    await this.api('/api/people', { method: 'POST', body: JSON.stringify(payload) });
                     showToast('Pessoa adicionada ao time! 🎉', 'success');
                 }
                 this.showPersonModal = false;

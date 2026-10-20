@@ -122,6 +122,7 @@ _NEW_DDL = [
         active BOOLEAN NOT NULL DEFAULT TRUE,
         hired_at DATE,
         notes TEXT,
+        transcript_aliases JSONB NOT NULL DEFAULT '[]'::jsonb,
         legacy_user_id INTEGER UNIQUE REFERENCES users(id),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -226,6 +227,7 @@ _NEW_DDL = [
 
 # Evoluções incrementais (colunas adicionadas após a primeira versão das tabelas)
 _EVOLUTION_DDL = [
+    ("ALTER TABLE people ADD COLUMN IF NOT EXISTS transcript_aliases JSONB NOT NULL DEFAULT '[]'::jsonb", "people.transcript_aliases"),
     ("ALTER TABLE one_on_ones ADD COLUMN IF NOT EXISTS extraction_json JSONB", "one_on_ones.extraction_json"),
     ("ALTER TABLE card_jobs ADD COLUMN IF NOT EXISTS progress_json JSONB", "card_jobs.progress_json"),
 ]
@@ -244,7 +246,7 @@ def check_database():
             conn.execute(text("SELECT 1"))
             # WHERE FALSE valida tabelas/colunas sem consultar registros.
             conn.execute(text("""
-                SELECT users.id, people.id, one_on_ones.extraction_json,
+                SELECT users.id, people.id, people.transcript_aliases, one_on_ones.extraction_json,
                        commitments.id, checkpoints.id, card_jobs.progress_json,
                        member_cards.id, connections.id
                 FROM users, people, one_on_ones, commitments, checkpoints,

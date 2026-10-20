@@ -1,10 +1,12 @@
 import base64
+import json
 
 from flask import Blueprint, request, jsonify, session
 from sqlalchemy import text
 
 from ..database import session_factory
 from ..security import login_required
+from ..transcripts import validate_transcript_aliases
 from .. import calendar as calendar_svc
 
 bp = Blueprint("people", __name__, url_prefix="/api")
@@ -15,7 +17,7 @@ bp = Blueprint("people", __name__, url_prefix="/api")
 
 _PERSON_SELECT = """
     SELECT id, full_name, preferred_name, email, role_title, active,
-           hired_at, notes, photo IS NOT NULL, created_at
+           hired_at, notes, photo IS NOT NULL, created_at, transcript_aliases
     FROM people
 """
 
@@ -32,6 +34,7 @@ def _serialize_person(row):
         "notes": row[7],
         "has_photo": bool(row[8]),
         "created_at": row[9].isoformat() if row[9] else None,
+        "transcript_aliases": row[10] or [],
     }
 
 
@@ -77,14 +80,15 @@ def api_create_person():
     try:
         hired_at = _parse_optional_date(data.get('hired_at'))
         email = _normalize_email(data.get('email'))
+        transcript_aliases = validate_transcript_aliases(data.get('transcript_aliases', []))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
     db = session_factory()
     try:
         result = db.execute(text("""
-            INSERT INTO people (full_name, preferred_name, email, role_title, hired_at, notes)
-            VALUES (:name, :pref, :email, :role, :hired, :notes)
+            INSERT INTO people (full_name, preferred_name, email, role_title, hired_at, notes, transcript_aliases)
+            VALUES (:name, :pref, :email, :role, :hired, :notes, CAST(:aliases AS jsonb))
             RETURNING id
         """), {
             "name": full_name,
@@ -93,6 +97,7 @@ def api_create_person():
             "role": (data.get('role_title') or '').strip() or None,
             "hired": hired_at,
             "notes": data.get('notes') or None,
+            "aliases": json.dumps(transcript_aliases, ensure_ascii=False),
         })
         person_id = result.fetchone()[0]
         db.commit()
@@ -133,7 +138,7 @@ def api_get_person(person_id):
         db.close()
 
 
-@bp.route('/people/<int:person_id>', methods=['PUT'])
+@bp.route('/people/<int:person_id>', methods=['PUT', 'PATCH'])
 @login_required
 def api_update_person(person_id):
     data = request.json or {}
@@ -147,6 +152,13 @@ def api_update_person(person_id):
         if key in data:
             updates.append(f"{col} = :{key}")
             params[key] = (data[key] or '').strip() or None
+    if 'transcript_aliases' in data:
+        try:
+            aliases = validate_transcript_aliases(data['transcript_aliases'])
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        updates.append("transcript_aliases = CAST(:aliases AS jsonb)")
+        params["aliases"] = json.dumps(aliases, ensure_ascii=False)
     if 'email' in data:
         try:
             updates.append("email = :email")

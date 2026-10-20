@@ -59,6 +59,21 @@ O encontro precisa ter um título como `1:1`, `1x1`, `1-1`, `1/1`, `1on1`, `one-
 
 Referência da API: [Events: list — Google Calendar](https://developers.google.com/workspace/calendar/api/v3/reference/events/list).
 
+### Correção de nomes nas transcrições
+
+Em **Meu Time → Editar pessoa → Grafias do nome nas transcrições**, cadastre as variações que o Meet costuma produzir, uma por linha (até 20). Por exemplo:
+
+| Pessoa | Grafias a cadastrar |
+|---|---|
+| Adriano Forni | `FORN` e `FORNE` |
+| Rafael Quines | `KINIS` |
+
+Antes de extrair insights, o Cortex substitui essas grafias pelo nome completo cadastrado, inclusive quando a pessoa é citada em outro 1:1. Reconhece maiúsculas, minúsculas e acentos, sem substituir trechos de palavras, e-mails ou URLs. `Adriano FORN` vira `Adriano Forni`, sem duplicar o primeiro nome. Não há inferência de novas grafias: elas precisam ser cadastradas. Se uma grafia identificar mais de uma pessoa, o texto é mantido e o detalhe do 1:1 mostra a ambiguidade; um nome composto que identifique uma única pessoa pode resolver o caso.
+
+A transcrição original permanece intacta. Abra o detalhe do 1:1 para conferir a prévia corrigida, as substituições e eventuais ambiguidades. Se alterar as grafias depois de analisar uma reunião, use **Reextrair insights com IA** para atualizar resumo e combinados. A reextração substitui combinados abertos dessa sessão e preserva concluídos/cancelados. Gere novamente os cards existentes após reextrair; novas pautas usam os insights atualizados.
+
+**Atualização de instalações existentes:** antes de servir esta versão, execute `uv run --env-file .env python -m cortex.init_db` para adicionar `people.transcript_aliases`. A evolução é idempotente e não cadastra variantes automaticamente. Não há chamada adicional à IA para corrigir nomes.
+
 ### Limpeza de tabelas legadas
 
 ```bash
@@ -77,6 +92,7 @@ cortex/
 ├── init_db.py          # inicialização explícita: python -m cortex.init_db
 ├── oauth.py            # origem dos callbacks e credenciais Google em runtime
 ├── security.py         # allowlist de e-mails + login_required
+├── transcripts.py      # dicionário de grafias e correção de nomes antes da análise
 ├── ai/                 # camada OpenAI (4 features de IA)
 ├── views/              # blueprints: auth, people, sessions,
 │                       #   checkpoints, cards, connections
