@@ -1,6 +1,6 @@
 """Dashboard da home: agregações do time para a visão de alta performance.
 
-Tudo é derivado das tabelas existentes (one_on_ones, commitments, people)
+Tudo é derivado dos registros de 1:1s, reuniões, ações e pessoas
 via SQL — sem custo de IA. A saúde por pessoa (member_cards) já é servida
 por /api/cards/latest e é combinada no frontend.
 """
@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from ..database import session_factory
 from ..security import login_required
+from ..meetings_context import load_meeting_context
 
 bp = Blueprint("dashboard", __name__, url_prefix="/api")
 
@@ -36,6 +37,68 @@ def _month_series(today):
     current = today.year * 12 + today.month - 1
     return [date(index // 12, index % 12 + 1, 1)
             for index in range(current - _MONTHS + 1, current + 1)]
+
+
+def _meeting_dashboard(db, today, people_pulse):
+    """Fóruns complementam a visão sem alterar cadência/sentimento de 1:1s."""
+    meetings_30d = db.execute(text("""
+        SELECT COUNT(*) FROM meetings
+        WHERE occurred_on >= :since AND occurred_on <= :today
+    """), {"since": today - timedelta(days=30), "today": today}).scalar() or 0
+    counts = db.execute(text("""
+        SELECT COUNT(*) FILTER (WHERE status = 'open'),
+               COUNT(*) FILTER (WHERE status = 'open' AND due_date < :today)
+        FROM meeting_actions
+    """), {"today": today}).fetchone()
+    frequency = {r[0]: r[1] for r in db.execute(text("""
+        SELECT mp.person_id, COUNT(DISTINCT m.id)
+        FROM meeting_participants mp JOIN meetings m ON m.id = mp.meeting_id
+        WHERE m.occurred_on >= :since AND m.occurred_on <= :today
+        GROUP BY mp.person_id
+    """), {"since": today - timedelta(days=90), "today": today}).fetchall()}
+    assigned = {r[0]: (r[1], r[2]) for r in db.execute(text("""
+        SELECT person_id, COUNT(*) FILTER (WHERE status = 'open'),
+               COUNT(*) FILTER (WHERE status = 'open' AND due_date < :today)
+        FROM meeting_actions WHERE person_id IS NOT NULL GROUP BY person_id
+    """), {"today": today}).fetchall()}
+    for person in people_pulse:
+        open_count, overdue_count = assigned.get(person['person_id'], (0, 0))
+        person.update(group_meetings_90d=frequency.get(person['person_id'], 0),
+                      open_meeting_actions=open_count, overdue_meeting_actions=overdue_count)
+
+    context = load_meeting_context(db, limit=20, as_of=today)
+    result = {
+        "kpis": {"meetings_30d": meetings_30d, "open_actions": counts[0] or 0,
+                 "overdue_actions": counts[1] or 0},
+        "recent_meetings": [], "actions": context['actions'][:12],
+        "strategic_themes": [], "decisions": [], "risks": [], "opportunities": [],
+        "coverage": {"recent_meetings_limit": 20, "insights_window_days": _TOPICS_DAYS},
+    }
+    since = (today - timedelta(days=_TOPICS_DAYS)).isoformat()
+    for meeting in context['meetings']:
+        occurred_on = meeting['occurred_on']
+        if not occurred_on or occurred_on > today.isoformat():
+            continue
+        source = {"meeting_id": meeting['id'], "title": meeting['title'],
+                  "forum": meeting.get('forum'), "occurred_on": occurred_on}
+        result['recent_meetings'].append({**source, "id": meeting['id'],
+                                          "summary_ai": meeting.get('summary_ai'),
+                                          "analysis_stale": meeting.get('analysis_stale', False)})
+        if occurred_on < since or meeting.get('analysis_stale'):
+            continue
+        extraction = meeting.get('extraction') or {}
+        for field in ('strategic_themes', 'decisions', 'risks', 'opportunities'):
+            seen = set()
+            for value in extraction.get(field, []) if isinstance(extraction.get(field), list) else []:
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                key = value.strip().casefold()
+                if key in seen or len(result[field]) >= 8:
+                    continue
+                seen.add(key)
+                result[field].append({**source, "text": value.strip()})
+    result['recent_meetings'] = result['recent_meetings'][:6]
+    return result
 
 
 @bp.route('/dashboard', methods=['GET'])
@@ -234,6 +297,8 @@ def dashboard():
                                              "occurred_on": occurred_on.isoformat(),
                                              "text": txt})
 
+        meeting_context = _meeting_dashboard(db, today, people_pulse)
+
         return jsonify({
             "kpis": {
                 "active_people": len(active_ids),
@@ -253,6 +318,7 @@ def dashboard():
             "top_topics": top_topics,
             "recent_wins": recent_wins,
             "attention_points": attention_points,
+            "meeting_context": meeting_context,
         })
     finally:
         db.close()

@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from cortex.assistant_gmail import search_gmail
 from cortex.database import session_factory
+from cortex.meeting_insights import analysis_stale
 from cortex.transcripts import normalize_transcript
 
 _CONTEXT_BUDGET = 70_000
@@ -22,7 +23,7 @@ _SOURCE_BUDGET = 3_600
 _CHUNK_SIZE = 1_400
 _CHUNK_OVERLAP = 180
 _MAX_SOURCES = 70
-_SOURCE_ID = re.compile(r"(?<![A-Za-z0-9_])(?:person:[1-9][0-9]{0,9}|one_on_one:[1-9][0-9]{0,9}|commitment:[1-9][0-9]{0,9}|checkpoint:[1-9][0-9]{0,9}|email:[A-Za-z0-9_-]{1,200})(?![A-Za-z0-9_:-])")
+_SOURCE_ID = re.compile(r"(?<![A-Za-z0-9_])(?:(?:person|one_on_one|commitment|checkpoint|meeting|meeting_action):[1-9][0-9]{0,9}|email:[A-Za-z0-9_-]{1,200})(?![A-Za-z0-9_:-])")
 _FOLLOWUP_REFERENCES = set("""
 esse essa esses essas isso isto aquele aquela aqueles aquelas deles delas dele dela
 tabela lista grafico organograma linha linhas item itens primeiro primeira segundo
@@ -142,6 +143,81 @@ def _record(kind, row, person, body, date=None, title=None):
             "record_id": row["id"]}
 
 
+def _record_people(record):
+    """Relevance comes from declared attendance or an explicit action assignment."""
+    ids = {record["person_id"]} if record.get("person_id") is not None else set()
+    if record["type"] == "meeting":
+        ids.update(record.get("participant_ids") or [])
+        ids.update(record.get("assigned_person_ids") or [])
+    return ids
+
+
+def _meeting_excerpt(row, participants, people):
+    """Keep evidence readable while source IDs/analysis metadata stay separate."""
+    stale = analysis_stale(row, participants)
+    lines = ["Reunião coletiva: participantes declarados não são necessariamente autores das falas.",
+             "Participantes: " + ("; ".join(p["full_name"] for p in participants) or "não informados")]
+    for key, label in (("title", "Título"), ("forum", "Fórum"),
+                       ("external_participants", "Convidados")):
+        if row.get(key):
+            lines.append(f"{label}: {row[key]}")
+    if stale:
+        lines.append("Análise anterior desatualizada omitida; utilize as notas e a transcrição atuais.")
+    for key, label in (("notes", "Anotações"), ("transcript_raw", "Transcrição")):
+        if not row.get(key):
+            continue
+        normalized = normalize_transcript(row[key], people)
+        if normalized["corrections"]:
+            lines.append("Nomes corrigidos com grafias cadastradas; original preservado.")
+        lines.append(f"{label}:\n{normalized['text']}")
+    if stale:
+        return "\n".join(lines)
+    extraction = _json(row.get("extraction_json"), {})
+    extraction = extraction if isinstance(extraction, dict) else {}
+    summary = row.get("summary_ai") or extraction.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        lines.append(f"Resumo:\n{summary}")
+    for key, label in (("topics", "Temas"), ("decisions", "Decisões"),
+                       ("risks", "Riscos"), ("opportunities", "Oportunidades"),
+                       ("strategic_themes", "Temas estratégicos"),
+                       ("open_questions", "Questões em aberto")):
+        values = extraction.get(key)
+        if key == "topics":
+            stored = _json(row.get("topics"), [])
+            values = (stored if isinstance(stored, list) else []) + (values if isinstance(values, list) else [])
+        if isinstance(values, list):
+            values = list(dict.fromkeys(v.strip() for v in values if isinstance(v, str) and v.strip()))
+            if values:
+                lines.append(label + ":\n" + "\n".join("- " + v for v in values))
+    actions = extraction.get("actions")
+    suggestions = []
+    for action in actions if isinstance(actions, list) else []:
+        if not isinstance(action, dict) or not isinstance(action.get("description"), str):
+            continue
+        description = action["description"].strip()
+        if not description:
+            continue
+        owner = action.get("owner_name")
+        owner = owner.strip() if isinstance(owner, str) and owner.strip() else "não definido"
+        due = _iso(action.get("due_date")) or "não definido"
+        suggestions.append(f"- {description} — Responsável: {owner}; prazo: {due}")
+    if suggestions:
+        lines.append("Encaminhamentos sugeridos pela análise (adoção ainda não comprovada):\n" + "\n".join(suggestions))
+    return "\n".join(lines)
+
+
+def _meeting_action_excerpt(row, person):
+    statuses = {"open": "em aberto", "done": "concluído", "cancelled": "cancelado"}
+    owner = (person or {}).get("full_name") or row.get("owner_name") or "não definido"
+    lines = [f"Encaminhamento: {row['description']}", f"Responsável: {owner}",
+             f"Status: {statuses.get(row.get('status'), 'não informado')}",
+             f"Reunião: {row['meeting_title']}"]
+    for key, label in (("forum", "Fórum"), ("due_date", "Prazo"), ("closed_at", "Encerrado em")):
+        if row.get(key):
+            lines.append(f"{label}: {_iso(row[key])}")
+    return "\n".join(lines)
+
+
 def _conversation_hints(message, history, records, explicit_person_ids):
     """Resolve UI references to current records, never to old answer text.
 
@@ -186,7 +262,7 @@ def _conversation_hints(message, history, records, explicit_person_ids):
             hints.append(source_id)
             if len(hints) >= _MAX_SOURCES:
                 break
-    hint_people = {known[source_id]["person_id"] for source_id in hints}
+    hint_people = {pid for source_id in hints for pid in _record_people(known[source_id])}
     if explicit_person_ids and not explicit_person_ids.issubset(hint_people):
         return []
     return hints
@@ -240,6 +316,49 @@ def _load_database():
                 if kind == "one_on_one" and row.get("title"):
                     title = f"{row['title']} · {(person or {}).get('full_name', '')}"
                 records.append(_record(kind, row, person, body, row.get(date_key), title))
+        # A collective meeting is one source, regardless of attendee count.
+        # This scans the entire raw history as well as current AI analysis.
+        participants_by_meeting = defaultdict(list)
+        for participant in db.execute(text("""
+            SELECT mp.meeting_id, p.id, p.full_name
+            FROM meeting_participants mp JOIN people p ON p.id = mp.person_id
+            ORDER BY mp.meeting_id, p.id
+        """)).mappings():
+            participants_by_meeting[participant["meeting_id"]].append({
+                "id": participant["id"], "full_name": participant["full_name"]})
+        actions = [dict(raw) for raw in db.execute(text("""
+            SELECT a.id, a.meeting_id, a.person_id, a.description, a.owner_name,
+                   a.due_date, a.status, a.closed_at, a.created_at,
+                   m.title AS meeting_title, m.forum, m.occurred_on
+            FROM meeting_actions a JOIN meetings m ON m.id = a.meeting_id
+            ORDER BY a.id
+        """)).mappings()]
+        assignments_by_meeting = defaultdict(set)
+        for action in actions:
+            if action["person_id"] is not None:
+                assignments_by_meeting[action["meeting_id"]].add(action["person_id"])
+        for raw in db.execute(text("""
+            SELECT id, title, forum, occurred_on, external_participants,
+                   transcript_raw, notes, summary_ai, topics, extraction_json
+            FROM meetings ORDER BY occurred_on, id
+        """)).mappings():
+            row = dict(raw)
+            participants = participants_by_meeting[row["id"]]
+            records.append({"id": f"meeting:{row['id']}", "type": "meeting",
+                            "title": f"Reunião · {row['title']}",
+                            "excerpt": _meeting_excerpt(row, participants, people),
+                            "date": _iso(row["occurred_on"]), "person_id": None,
+                            "record_id": row["id"], "meeting_id": row["id"],
+                            "participant_ids": [p["id"] for p in participants],
+                            "assigned_person_ids": sorted(assignments_by_meeting[row["id"]])})
+        for row in actions:
+            person = by_id.get(row["person_id"])
+            records.append({"id": f"meeting_action:{row['id']}", "type": "meeting_action",
+                            "title": f"Encaminhamento · {row['meeting_title']}",
+                            "excerpt": _meeting_action_excerpt(row, person),
+                            "date": _iso(row["occurred_on"]), "person_id": row["person_id"],
+                            "record_id": row["id"], "meeting_id": row["meeting_id"],
+                            "participant_ids": []})
         return people, records
     finally:
         db.close()
@@ -290,7 +409,7 @@ def _select(records, terms, matched_ids, budget=_CONTEXT_BUDGET, source_hints=No
     candidates = []
     for record in records:
         score = _score(record["excerpt"] + " " + record["title"], terms, weights)
-        person_match = record["person_id"] in matched_ids or (record["type"] == "email" and bool(matched_ids))
+        person_match = bool(_record_people(record) & matched_ids) or (record["type"] == "email" and bool(matched_ids))
         hinted = record["id"] in source_hints
         if terms and score == 0 and not person_match and not hinted:
             continue
@@ -375,7 +494,7 @@ def gather_context(user_id, message, history=None):
     # Relevant people are returned in full; other names remain discoverable to
     # support organization charts, without flooding the model with every note.
     people_metadata = []
-    included_people = matched_ids | {item["person_id"] for item in selected if item["person_id"] is not None}
+    included_people = matched_ids | {pid for item in selected for pid in _record_people(item)}
     for person in metadata_all:
         if person["id"] in included_people or not matched_ids:
             people_metadata.append(person)

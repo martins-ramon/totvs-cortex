@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/components.css">
     <link rel="stylesheet" href="/static/css/assistant.css">
+    <link rel="stylesheet" href="/static/css/meetings.css">
     <style>
         [x-cloak] { display: none !important; }
     </style>
@@ -62,6 +63,10 @@
                     <span class="nav-icon">🧭</span>
                     <span class="nav-label">Preparar 1:1</span>
                 </a>
+                <a href="#" class="nav-item" :class="{active: view==='meetings'}" @click.prevent="go('meetings')" title="Reuniões" aria-label="Reuniões">
+                    <span class="nav-icon">🗓️</span>
+                    <span class="nav-label">Reuniões</span>
+                </a>
                 <a href="#" class="nav-item" :class="{active: view==='cards'}" @click.prevent="goCards()" title="Cards do Time" aria-label="Cards do Time">
                     <span class="nav-icon">🗂️</span>
                     <span class="nav-label">Cards do Time</span>
@@ -90,7 +95,7 @@
             <section x-show="view==='dashboard'">
                 <div class="view-header">
                     <h2>Bom te ver, <span x-text="firstName"></span> 👋</h2>
-                    <p>Sua visão geral do time e das conversas 1:1.</p>
+                    <p>Sua visão geral do time, das conversas e dos planos da área.</p>
                 </div>
 
                 <!-- KPIs -->
@@ -128,6 +133,7 @@
 
                 <div class="quick-actions">
                     <button class="btn-primary btn-inline" @click="openSessionModal()">＋ Registrar 1:1</button>
+                    <button class="btn-secondary btn-inline" @click="openMeetingForm()">＋ Registrar reunião</button>
                     <button class="btn-secondary btn-inline" @click="go('prep')">🧭 Preparar próximo 1:1</button>
                 </div>
 
@@ -175,7 +181,7 @@
                                         <span x-text="p.open_commitments + ' aberto' + (p.open_commitments === 1 ? '' : 's')"></span>
                                         <span class="badge-overdue" x-show="p.overdue_commitments > 0" x-text="p.overdue_commitments + ' vencido' + (p.overdue_commitments === 1 ? '' : 's')"></span>
                                     </td>
-                                    <td><span x-text="p.sessions_90d + ' 1:1s'"></span></td>
+                                    <td><span x-text="p.sessions_90d + ' 1:1s'"></span><small class="meeting-pulse-context" x-show="p.group_meetings_90d || p.open_meeting_actions" x-text="(p.group_meetings_90d || 0) + ' reuniões de fóruns · ' + (p.open_meeting_actions || 0) + ' ações em aberto'"></small></td>
                                 </tr>
                             </template>
                         </tbody>
@@ -207,7 +213,7 @@
                     <div class="panel">
                         <h4>⚠️ Riscos e pontos de atenção</h4>
                         <template x-if="riskFeed.length === 0">
-                            <p class="form-hint">Nenhum risco mapeado. Gere os Cards do Time e extraia insights das 1:1s para alimentar este radar.</p>
+                            <p class="form-hint">Nenhum sinal individual mapeado. Gere os Cards do Time e extraia insights das 1:1s para alimentar este radar.</p>
                         </template>
                         <ul class="insight-list">
                             <template x-for="(r, i) in riskFeed" :key="i">
@@ -240,7 +246,7 @@
                         </ul>
                     </div>
                     <div class="panel">
-                        <h4>🔥 Temas quentes (60 dias)</h4>
+                        <h4>🔥 Temas dos 1:1s (60 dias)</h4>
                         <template x-if="!dash || dash.top_topics.length === 0">
                             <p class="form-hint">Os tópicos mais recorrentes das 1:1s aparecem aqui após a extração IA.</p>
                         </template>
@@ -250,6 +256,49 @@
                             </template>
                         </div>
                     </div>
+                </div>
+                <div class="meeting-section-heading"><h3 class="section-title">Estratégia e execução</h3><button type="button" class="btn-link" @click="go('meetings')">Ver reuniões →</button></div>
+                <div class="meeting-kpis">
+                    <div class="panel"><strong x-text="meetingContext.kpis.meetings_30d ?? 0"></strong><span>reuniões nos últimos 30 dias</span></div>
+                    <div class="panel"><strong x-text="meetingContext.kpis.open_actions ?? 0"></strong><span>ações de reuniões em aberto</span></div>
+                    <div class="panel" :class="{'meeting-overdue-kpi': meetingContext.kpis.overdue_actions > 0}"><strong x-text="meetingContext.kpis.overdue_actions ?? 0"></strong><span>ações de reuniões vencidas</span></div>
+                </div>
+                <div class="meeting-strategy-grid" x-show="meetingContext.strategic_themes.length || meetingContext.decisions.length || meetingContext.risks.length || meetingContext.opportunities.length">
+                    <template x-for="group in [{key:'strategic_themes', title:'Temas estratégicos'}, {key:'decisions', title:'Decisões recentes'}, {key:'risks', title:'Riscos dos fóruns'}, {key:'opportunities', title:'Oportunidades'}]" :key="group.key">
+                        <div class="panel" x-show="meetingContext[group.key].length"><h4 x-text="group.title"></h4><ul class="insight-list"><template x-for="(item, index) in meetingContext[group.key].slice(0, 4)" :key="index"><li><p x-text="item.text"></p><button type="button" class="meeting-source-link" @click="viewMeeting(item.meeting_id)" x-text="(item.forum || item.title || 'Reunião') + ' · ' + fmtDate(item.occurred_on)"></button></li></template></ul></div>
+                    </template>
+                </div>
+                <div class="panel meeting-tactical-plan" x-show="meetingContext.actions.length"><h4>Plano tático dos fóruns</h4><template x-for="action in meetingContext.actions.slice(0, 8)" :key="action.id"><div class="meeting-context-action"><div><button type="button" class="meeting-text-link" @click="viewMeeting(action.meeting_id)" x-text="action.description"></button><small class="form-hint" x-text="(action.owner_name || 'Sem responsável') + ' · ' + (action.forum || action.meeting_title || 'Reunião')"></small></div><span class="form-hint meeting-action-date" :class="{'text-warn': action.is_overdue}" x-text="action.due_date ? fmtDate(action.due_date) + (action.is_overdue ? ' · vencida' : '') : 'Sem prazo'"></span></div></template></div>
+            </section>
+
+            <!-- ===== REUNIÕES DE FÓRUNS ===== -->
+            <section x-show="view==='meetings'">
+                <div class="view-header header-row">
+                    <div><h2>Reuniões</h2><p>Fóruns, decisões e ações que orientam a estratégia da área.</p></div>
+                    <button type="button" class="btn-primary btn-inline" @click="openMeetingForm()">＋ Registrar reunião</button>
+                </div>
+                <form class="meeting-filters panel" @submit.prevent="loadMeetings()" aria-label="Filtrar reuniões">
+                    <div class="form-group meeting-search"><label for="meeting-search">Buscar</label><input id="meeting-search" class="form-control" type="search" x-model="meetingFilters.q" placeholder="Título, transcrição ou anotações" @input.debounce.350ms="loadMeetings()"></div>
+                    <div class="form-group"><label for="meeting-forum-filter">Fórum</label><select id="meeting-forum-filter" class="form-control" x-model="meetingFilters.forum" @change="loadMeetings()"><option value="">Todos</option><template x-for="forum in meetingForums" :key="forum"><option :value="forum" x-text="forum"></option></template></select></div>
+                    <div class="form-group"><label for="meeting-person-filter">Participante</label><select id="meeting-person-filter" class="form-control" x-model="meetingFilters.person_id" @change="loadMeetings()"><option value="">Todos</option><template x-for="person in people" :key="person.id"><option :value="person.id" x-text="person.full_name"></option></template></select></div>
+                    <div class="form-group"><label for="meeting-date-from">De</label><input id="meeting-date-from" type="date" class="form-control" x-model="meetingFilters.date_from" @change="loadMeetings()"></div>
+                    <div class="form-group"><label for="meeting-date-to">Até</label><input id="meeting-date-to" type="date" class="form-control" x-model="meetingFilters.date_to" @change="loadMeetings()"></div>
+                    <button type="button" class="btn-link" @click="clearMeetingFilters()">Limpar</button>
+                </form>
+                <p class="meeting-error" role="alert" x-show="meetingsError" x-text="meetingsError"></p>
+                <div class="loading" x-show="meetingsLoading" role="status"><span class="spinner" aria-hidden="true"></span><p>Carregando reuniões…</p></div>
+                <div class="empty-state" x-show="!meetingsLoading && !meetingsError && !meetings.length"><p>Nenhuma reunião encontrada.</p><p class="form-hint">Registre uma reunião com a transcrição ou suas anotações.</p></div>
+                <p class="form-hint meeting-result-count" x-show="!meetingsLoading && meetings.length" x-text="meetingsTotal > meetings.length ? 'Exibindo as ' + meetings.length + ' reuniões mais recentes de ' + meetingsTotal + '. Use os filtros para refinar.' : meetingsTotal + ' reunião(ões)'"></p>
+                <div class="meeting-list" x-show="!meetingsLoading">
+                    <template x-for="meeting in meetings" :key="meeting.id">
+                        <button type="button" class="panel meeting-list-item" @click="viewMeeting(meeting.id)">
+                            <div class="meeting-list-top"><span class="meeting-forum" x-text="meeting.forum || 'Sem fórum'"></span><time x-text="fmtDate(meeting.occurred_on)"></time></div>
+                            <h3 x-text="meeting.title"></h3>
+                            <p class="meeting-participants" x-text="meetingParticipantNames(meeting)"></p>
+                            <p class="meeting-summary-preview" x-show="meeting.summary_ai" x-text="meeting.summary_ai"></p>
+                            <div class="tag-row"><span class="chip chip-muted" x-show="!meeting.summary_ai">Sem análise</span><span class="chip meeting-stale" x-show="meeting.analysis_stale">Análise desatualizada</span><span class="chip chip-muted" x-show="!meeting.has_transcript">Sem transcrição</span><span class="chip" x-show="meeting.open_action_count" x-text="meeting.open_action_count + ' ação(ões) em aberto'"></span></div>
+                        </button>
+                    </template>
                 </div>
             </section>
 
@@ -322,6 +371,7 @@
                             <button class="filter-chip" :class="{active: currentTab==='sessions'}" @click="currentTab='sessions'">1:1s (<span x-text="personSessions.length"></span>)</button>
                             <button class="filter-chip" :class="{active: currentTab==='commitments'}" @click="currentTab='commitments'">Combinados (<span x-text="personCommitments.filter(c => c.status==='open').length"></span> abertos)</button>
                             <button class="filter-chip" :class="{active: currentTab==='checkpoints'}" @click="currentTab='checkpoints'">Checkpoints (<span x-text="personCheckpoints.length"></span>)</button>
+                            <button class="filter-chip" :class="{active: currentTab==='meetings'}" @click="currentTab='meetings'">Reuniões (<span x-text="personMeetings.length"></span>)</button>
                         </div>
 
                         <!-- aba 1:1s -->
@@ -371,6 +421,17 @@
                                     </div>
                                 </div>
                             </template>
+                        </div>
+
+                        <!-- Contexto coletivo: participação não implica autoria individual. -->
+                        <div x-show="currentTab==='meetings'">
+                            <div class="btn-row"><button type="button" class="btn-secondary btn-inline" @click="openMeetingForm(null, currentPerson.id)">＋ Registrar reunião</button></div>
+                            <p class="form-hint meeting-context-note">Reuniões com participação ou ações atribuídas a esta pessoa. As conclusões dos fóruns são coletivas; a presença não indica autoria de uma fala.</p>
+                            <p class="meeting-error" role="alert" x-show="personMeetingsError" x-text="personMeetingsError"></p>
+                            <div class="loading" x-show="personMeetingsLoading" role="status"><span class="spinner" aria-hidden="true"></span><p>Carregando reuniões…</p></div>
+                            <div class="empty-state" x-show="!personMeetingsLoading && !personMeetingsError && !personMeetings.length"><p>Nenhuma reunião vinculada a esta pessoa.</p></div>
+                            <div class="meeting-list"><template x-for="meeting in personMeetings" :key="meeting.id"><button type="button" class="panel meeting-list-item" @click="viewMeeting(meeting.id)"><div class="meeting-list-top"><span class="meeting-forum" x-text="meeting.forum || 'Sem fórum'"></span><span x-text="fmtDate(meeting.occurred_on)"></span></div><h3 x-text="meeting.title"></h3><p class="meeting-summary-preview" x-show="meeting.summary_ai" x-text="meeting.summary_ai"></p><span class="chip meeting-stale" x-show="meeting.analysis_stale">Análise desatualizada</span></button></template></div>
+                            <div class="panel meeting-person-actions" x-show="personMeetingActions.length"><h4>Ações atribuídas a esta pessoa</h4><template x-for="action in personMeetingActions" :key="action.id"><div class="meeting-context-action"><button type="button" class="meeting-text-link" @click="viewMeeting(action.meeting_id)" x-text="action.description"></button><small class="form-hint"><span x-text="action.meeting_title || 'Reunião'"></span><span x-show="action.due_date" x-text="' · ' + fmtDate(action.due_date)"></span><span class="badge-overdue" x-show="action.is_overdue">vencida</span><span x-text="action.status === 'done' ? ' · concluída' : action.status === 'cancelled' ? ' · cancelada' : ' · em aberto'"></span></small></div></template></div>
                         </div>
 
                         <!-- aba combinados -->
@@ -452,7 +513,7 @@
             <section x-show="view==='prep'">
                 <div class="view-header">
                     <h2>Preparar próximo 1:1</h2>
-                    <p>Histórico consolidado, combinados, inbox e agenda sugerida pela IA.</p>
+                    <p>Histórico, combinados, contexto dos fóruns, inbox e agenda sugerida pela IA.</p>
                 </div>
 
                 <div class="form-group" style="max-width:420px;">
@@ -545,6 +606,13 @@
                             </div>
                         </div>
 
+                        <div class="panel meeting-prep-context" x-show="(prep.group_meetings || []).length || (prep.meeting_actions || []).length">
+                            <h4>Contexto dos fóruns</h4>
+                            <p class="form-hint meeting-context-note">Discussões coletivas para enriquecer o próximo 1:1. A participação na reunião não atribui automaticamente opiniões à pessoa.</p>
+                            <template x-for="meeting in (prep.group_meetings || [])" :key="meeting.id"><div class="meeting-context-item"><button type="button" class="meeting-text-link" @click="viewMeeting(meeting.id)" x-text="meeting.title"></button><small class="form-hint" x-text="(meeting.forum || 'Reunião') + ' · ' + fmtDate(meeting.occurred_on)"></small><p class="form-hint" x-show="meeting.summary_ai" x-text="meeting.summary_ai"></p><span class="chip meeting-stale" x-show="meeting.analysis_stale">Análise desatualizada</span></div></template>
+                            <div x-show="(prep.meeting_actions || []).length"><h5>Ações atribuídas à pessoa</h5><template x-for="action in (prep.meeting_actions || [])" :key="action.id"><div class="meeting-context-action"><button type="button" class="meeting-text-link" @click="viewMeeting(action.meeting_id)" x-text="action.description"></button><small class="form-hint" :class="{'text-warn': action.is_overdue}" x-text="(action.due_date ? fmtDate(action.due_date) : 'Sem prazo') + (action.is_overdue ? ' · vencida' : '')"></small></div></template></div>
+                        </div>
+
                         <div class="panel prep-inbox" style="margin-top:1.25rem;">
                             <h4>✉️ Inbox em andamento</h4>
                             <template x-if="prepHasEmailInsights()">
@@ -580,7 +648,7 @@
                 <div class="view-header header-row">
                     <div>
                         <h2>Cards do Time</h2>
-                        <p>Radiografia de cada pessoa: saúde, cadência, accountability e riscos — fundamentada em Project Aristotle e accountability radical.</p>
+                        <p>Radiografia de cada pessoa com 1:1s, checkpoints, reuniões e ações vinculadas. Gere novamente os cards após registrar novas evidências.</p>
                     </div>
                     <button class="btn-primary btn-inline" @click="startCardJob()" :disabled="cardJob.running" :aria-busy="cardJob.running">
                         <span x-show="!cardJob.running">🔄 Atualizar todos os cards</span>
@@ -798,6 +866,83 @@
             </section>
 
         </main>
+    </div>
+
+    <!-- ============ REUNIÕES: LEITURA E PLANO TÁTICO ============ -->
+    <div class="modal meeting-modal" :class="{open: !!meetingDetail || meetingDetailLoading || !!meetingDetailError}" x-show="!!meetingDetail || meetingDetailLoading || !!meetingDetailError" @keydown.escape.stop="closeMeetingDetail()">
+        <div class="modal-content modal-wide meeting-detail-content" role="dialog" aria-modal="true" aria-labelledby="meeting-detail-title" @click.outside="!showMeetingForm && closeMeetingDetail()">
+            <button type="button" class="meeting-close" @click="closeMeetingDetail()" aria-label="Fechar reunião" :disabled="meetingAnalyzing || meetingDeleting || meetingActionSaving || !!meetingActionBusy">×</button>
+            <div class="loading" x-show="meetingDetailLoading" role="status"><span class="spinner" aria-hidden="true"></span><p>Carregando reunião…</p></div>
+            <p class="meeting-error" role="alert" x-show="meetingDetailError" x-text="meetingDetailError"></p>
+            <template x-if="meetingDetail">
+                <div>
+                    <div class="meeting-detail-head"><span class="meeting-forum" x-text="meetingDetail.forum || 'Sem fórum'"></span><h3 id="meeting-detail-title" x-text="meetingDetail.title"></h3><p class="form-hint" x-text="fmtDateLong(meetingDetail.occurred_on)"></p><p class="meeting-participants" x-text="meetingParticipantNames(meetingDetail)"></p></div>
+                    <div class="btn-row meeting-detail-controls">
+                        <button type="button" class="btn-primary btn-inline" @click="analyzeMeeting()" :disabled="meetingAnalyzing || meetingDeleting || showMeetingForm || !(meetingDetail.transcript_raw || meetingDetail.notes)" :aria-busy="meetingAnalyzing"><span x-show="!meetingAnalyzing" x-text="meetingDetail.extraction ? '↻ Atualizar análise' : '✨ Analisar reunião'"></span><span class="btn-busy" x-show="meetingAnalyzing"><span class="spinner spinner-sm" aria-hidden="true"></span>Analisando</span></button>
+                        <button type="button" class="btn-secondary btn-inline" @click="openMeetingForm(meetingDetail)" :disabled="meetingAnalyzing || meetingDeleting || meetingActionSaving || !!meetingActionBusy">Editar</button>
+                        <button type="button" class="btn-small btn-delete" @click="deleteMeeting()" :disabled="meetingAnalyzing || meetingDeleting || meetingActionSaving || !!meetingActionBusy" x-text="meetingDeleting ? 'Excluindo…' : 'Excluir'"></button>
+                    </div>
+                    <p class="meeting-stale-notice" role="status" x-show="meetingDetail.analysis_stale">O conteúdo ou os participantes mudaram desde a última análise. Atualize a análise para incorporar as alterações. As ações já registradas são preservadas.</p>
+                    <p class="form-hint" x-show="!meetingDetail.extraction && !meetingAnalyzing">Analise a transcrição ou as anotações para identificar decisões, desafios e próximos passos.</p>
+                    <div class="meeting-summary" x-show="meetingDetail.summary_ai || meetingExtraction(meetingDetail).summary"><h4>Resumo</h4><p x-text="meetingExtraction(meetingDetail).summary || meetingDetail.summary_ai"></p></div>
+                    <div class="tag-row" x-show="(meetingDetail.topics || []).length"><template x-for="(topic, index) in (meetingDetail.topics || [])" :key="index"><span class="chip topic-chip" x-text="topic"></span></template></div>
+                    <div class="meeting-insight-grid"><template x-for="group in meetingInsightGroups(meetingDetail)" :key="group.key"><div class="meeting-insight"><h4 x-text="group.title"></h4><ul><template x-for="(item, index) in group.items" :key="index"><li x-text="item"></li></template></ul></div></template></div>
+
+                    <details class="meeting-proposals" x-show="meetingSuggestions.length" open>
+                        <summary>Ações sugeridas pela IA (<span x-text="meetingSuggestions.length"></span>)</summary>
+                        <p class="form-hint">Revise a descrição, o responsável e o prazo. A ação só entra no plano ao clicar em “Incluir no plano”. Atualize análises desatualizadas antes de incluir sugestões.</p>
+                        <template x-for="(suggestion, index) in meetingSuggestions" :key="suggestion.source_key">
+                            <div class="meeting-proposal" :class="{'meeting-proposal-adopted': meetingSuggestionAdopted(suggestion)}">
+                                <template x-if="!meetingSuggestionAdopted(suggestion)"><div>
+                                    <div class="form-group"><label :for="'meeting-proposal-description-' + index">Ação</label><textarea class="form-control" rows="2" :id="'meeting-proposal-description-' + index" x-model="suggestion.description" :disabled="!!meetingActionBusy || meetingAnalyzing"></textarea></div>
+                                    <div class="meeting-action-fields">
+                                        <div class="form-group"><label :for="'meeting-proposal-person-' + index">Responsável do time</label><select class="form-control" :id="'meeting-proposal-person-' + index" x-model="suggestion.person_id" @change="meetingOwnerChanged(suggestion)" :disabled="!!meetingActionBusy || meetingAnalyzing"><option value="" :selected="!suggestion.person_id">Outro / não definido</option><template x-for="person in people" :key="person.id"><option :value="String(person.id)" :selected="String(person.id) === String(suggestion.person_id)" x-text="person.full_name"></option></template></select></div>
+                                        <div class="form-group"><label :for="'meeting-proposal-owner-' + index">Nome do responsável</label><input class="form-control" :id="'meeting-proposal-owner-' + index" x-model="suggestion.owner_name" placeholder="A definir" :disabled="!!suggestion.person_id || !!meetingActionBusy || meetingAnalyzing"></div>
+                                        <div class="form-group"><label :for="'meeting-proposal-date-' + index">Prazo</label><input type="date" class="form-control" :id="'meeting-proposal-date-' + index" x-model="suggestion.due_date" :disabled="!!meetingActionBusy || meetingAnalyzing"></div>
+                                    </div>
+                                    <p class="meeting-error" role="alert" x-show="suggestion.error" x-text="suggestion.error"></p>
+                                    <button type="button" class="btn-small btn-view" @click="adoptMeetingSuggestion(suggestion)" :disabled="!!meetingActionBusy || meetingAnalyzing || meetingActionSaving || meetingDetail.analysis_stale" x-text="meetingActionBusy === suggestion.source_key ? 'Incluindo…' : 'Incluir no plano'"></button>
+                                </div></template>
+                                <template x-if="meetingSuggestionAdopted(suggestion)"><p><span class="meeting-adopted-mark">✓ Incluída no plano</span> <span x-text="suggestion.description"></span></p></template>
+                            </div>
+                        </template>
+                    </details>
+
+                    <div class="meeting-plan">
+                        <div class="meeting-section-heading"><h4>Plano tático</h4><button type="button" class="btn-link" @click="editMeetingAction()" :disabled="meetingAnalyzing || meetingActionSaving || !!meetingActionBusy">＋ Nova ação</button></div>
+                        <p class="form-hint" x-show="!(meetingDetail.actions || []).length && !meetingActionForm">Nenhuma ação registrada para esta reunião.</p>
+                        <p class="meeting-error" role="alert" x-show="meetingActionError" x-text="meetingActionError"></p>
+                        <template x-for="action in (meetingDetail.actions || [])" :key="action.id"><div class="meeting-plan-action" :class="{'meeting-action-done': action.status !== 'open'}"><div class="grow"><p x-text="action.description"></p><small class="form-hint"><strong x-text="action.owner_name || 'Sem responsável'"></strong><span x-text="action.due_date ? ' · ' + fmtDate(action.due_date) : ' · Sem prazo'"></span><span class="badge-overdue" x-show="action.is_overdue">vencida</span></small></div><div class="meeting-plan-action-controls"><select class="select-sm" :value="action.status" @change="setMeetingActionStatus(action, $event.target.value)" :disabled="meetingAnalyzing || !!meetingActionBusy || meetingActionSaving" :aria-label="'Status: ' + action.description"><option value="open">Em aberto</option><option value="done">Concluída</option><option value="cancelled">Cancelada</option></select><button type="button" class="btn-small btn-view" @click="editMeetingAction(action)" :disabled="meetingAnalyzing || meetingActionSaving || !!meetingActionBusy">Editar</button></div></div></template>
+                        <template x-if="meetingActionForm"><form class="meeting-action-editor" @submit.prevent="saveMeetingAction()">
+                            <h5 x-text="meetingActionForm.id ? 'Editar ação' : 'Nova ação'"></h5>
+                            <div class="form-group"><label for="meeting-action-description">Descrição *</label><textarea id="meeting-action-description" class="form-control" rows="2" x-model="meetingActionForm.description" required :disabled="meetingActionSaving"></textarea></div>
+                            <div class="meeting-action-fields"><div class="form-group"><label for="meeting-action-person">Responsável do time</label><select id="meeting-action-person" class="form-control" x-model="meetingActionForm.person_id" @change="meetingOwnerChanged(meetingActionForm)" :disabled="meetingActionSaving"><option value="" :selected="!meetingActionForm.person_id">Outro / não definido</option><template x-for="person in people" :key="person.id"><option :value="String(person.id)" :selected="String(person.id) === String(meetingActionForm.person_id)" x-text="person.full_name"></option></template></select></div><div class="form-group"><label for="meeting-action-owner">Nome do responsável</label><input id="meeting-action-owner" class="form-control" x-model="meetingActionForm.owner_name" placeholder="A definir" :disabled="!!meetingActionForm.person_id || meetingActionSaving"></div><div class="form-group"><label for="meeting-action-date">Prazo</label><input id="meeting-action-date" type="date" class="form-control" x-model="meetingActionForm.due_date" :disabled="meetingActionSaving"></div></div>
+                            <div class="btn-row"><button type="submit" class="btn-primary btn-inline" :disabled="meetingActionSaving || meetingAnalyzing || !!meetingActionBusy" x-text="meetingActionSaving ? 'Salvando…' : 'Salvar ação'"></button><button type="button" class="btn-secondary btn-inline" @click="meetingActionForm=null" :disabled="meetingActionSaving">Cancelar</button></div>
+                        </form></template>
+                    </div>
+                    <details class="transcript-details" x-show="meetingDetail.notes"><summary>Anotações</summary><pre class="transcript-box" x-text="meetingDetail.notes"></pre></details>
+                    <details class="transcript-details" x-show="meetingDetail.transcript_raw"><summary>Transcrição original</summary><pre class="transcript-box" x-text="meetingDetail.transcript_raw"></pre></details>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- ============ REUNIÕES: REGISTRO ============ -->
+    <div class="modal meeting-form-modal" :class="{open: showMeetingForm}" x-show="showMeetingForm" @keydown.escape.stop="closeMeetingForm()">
+        <div class="modal-content modal-wide" role="dialog" aria-modal="true" aria-labelledby="meeting-form-title" @click.outside="closeMeetingForm()">
+            <button type="button" class="meeting-close" @click="closeMeetingForm()" aria-label="Fechar formulário de reunião" :disabled="meetingSaving">×</button>
+            <h3 id="meeting-form-title" x-text="editingMeetingId ? 'Editar reunião' : 'Registrar reunião'"></h3>
+            <form @submit.prevent="saveMeeting()">
+                <div class="form-group"><label for="meeting-title">Título *</label><input id="meeting-title" class="form-control" x-ref="meetingTitle" x-model="meetingForm.title" placeholder="Ex.: Alinhamento de estratégia LYNN Studio" maxlength="240" required :disabled="meetingSaving"></div>
+                <div class="two-col-form"><div class="form-group"><label for="meeting-forum">Fórum</label><input id="meeting-forum" class="form-control" x-model="meetingForm.forum" list="meeting-known-forums" placeholder="Ex.: Comitê de produtos" maxlength="160" :disabled="meetingSaving"><datalist id="meeting-known-forums"><template x-for="forum in meetingForums" :key="forum"><option :value="forum"></option></template></datalist></div><div class="form-group"><label for="meeting-date">Data *</label><input id="meeting-date" type="date" class="form-control" x-model="meetingForm.occurred_on" required :disabled="meetingSaving"></div></div>
+                <fieldset class="meeting-participant-fieldset"><legend>Participantes do time</legend><div class="meeting-participant-options"><template x-for="person in people" :key="person.id"><label class="meeting-participant-option"><input type="checkbox" :value="String(person.id)" x-model="meetingForm.participant_ids" :disabled="meetingSaving"><span x-text="person.full_name"></span></label></template><p class="form-hint" x-show="!people.length">Nenhum perfil cadastrado no time.</p></div></fieldset>
+                <div class="form-group"><label for="meeting-external">Outros participantes</label><textarea id="meeting-external" class="form-control" rows="2" x-model="meetingForm.external_participants" placeholder="Nomes e áreas de pessoas sem perfil no time" :disabled="meetingSaving"></textarea></div>
+                <div class="form-group"><label for="meeting-transcript">Transcrição</label><textarea id="meeting-transcript" class="form-control mono" rows="9" x-model="meetingForm.transcript_raw" placeholder="Cole a transcrição da reunião" :disabled="meetingSaving"></textarea></div>
+                <div class="form-group"><label for="meeting-notes">Anotações e contexto</label><textarea id="meeting-notes" class="form-control" rows="4" x-model="meetingForm.notes" placeholder="Pauta, decisões, contexto e próximos passos" :disabled="meetingSaving"></textarea><small class="form-hint">Você também pode analisar uma reunião somente com anotações.</small></div>
+                <p class="meeting-error" role="alert" x-show="meetingFormError" x-text="meetingFormError"></p>
+                <div class="btn-row"><button type="submit" class="btn-primary btn-inline" :disabled="meetingSaving" :aria-busy="meetingSaving" x-text="meetingSaving ? 'Salvando…' : 'Salvar reunião'"></button><button type="button" class="btn-secondary btn-inline" @click="closeMeetingForm()" :disabled="meetingSaving">Cancelar</button></div>
+            </form>
+        </div>
     </div>
 
     <!-- ============ MODAL: PESSOA ============ -->
@@ -1104,7 +1249,7 @@
 
             <div class="assistant-source-panel" x-show="assistantSelectedSource" role="region" aria-label="Fonte consultada">
                 <div class="assistant-source-header"><div><small x-text="assistantSourceName(assistantSelectedSource?.type)"></small><h3 x-text="assistantSelectedSource?.title || 'Fonte consultada'"></h3></div><button type="button" class="assistant-icon-button" x-ref="assistantSourceClose" @click="closeAssistantSource()" aria-label="Voltar para a conversa"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button></div>
-                <div class="assistant-source-body"><p class="assistant-source-date" x-show="assistantSelectedSource?.date" x-text="assistantSourceDate(assistantSelectedSource?.date)"></p><p x-text="assistantSelectedSource?.excerpt || 'Este registro não possui um trecho de texto disponível.'"></p><a class="assistant-source-link" x-show="assistantGmailUrl(assistantSelectedSource)" :href="assistantGmailUrl(assistantSelectedSource)" target="_blank" rel="noopener noreferrer">Abrir no Gmail ↗</a><button type="button" class="assistant-source-link" x-show="assistantSelectedSource?.person_id" @click="openPersonById(assistantSelectedSource.person_id); closeAssistant()">Ver perfil da pessoa ↗</button></div>
+                <div class="assistant-source-body"><p class="assistant-source-date" x-show="assistantSelectedSource?.date" x-text="assistantSourceDate(assistantSelectedSource?.date)"></p><p x-text="assistantSelectedSource?.excerpt || 'Este registro não possui um trecho de texto disponível.'"></p><a class="assistant-source-link" x-show="assistantGmailUrl(assistantSelectedSource)" :href="assistantGmailUrl(assistantSelectedSource)" target="_blank" rel="noopener noreferrer">Abrir no Gmail ↗</a><button type="button" class="assistant-source-link" x-show="assistantSelectedSource?.meeting_id" @click="viewMeeting(assistantSelectedSource.meeting_id); closeAssistant()">Ver reunião e plano tático ↗</button><button type="button" class="assistant-source-link" x-show="assistantSelectedSource?.person_id" @click="openPersonById(assistantSelectedSource.person_id); closeAssistant()">Ver perfil da pessoa ↗</button></div>
             </div>
         </section>
         <button type="button" class="assistant-launcher" x-ref="assistantLauncher" @click="toggleAssistant()" :aria-expanded="assistantOpen" aria-controls="assistant-panel" :aria-label="assistantOpen ? 'Fechar Cortex IA' : 'Abrir Cortex IA'">
@@ -1116,6 +1261,7 @@
     <div class="toast-container" id="toast-container"></div>
 </div>
 
+<script src="/static/js/meetings.js" defer></script>
 <script src="/static/js/app.js" defer></script>
 <script src="/static/js/assistant.js" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js" defer></script>

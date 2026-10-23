@@ -28,6 +28,8 @@ Root `app.py` is a thin entrypoint exposing `app = create_app()` for Gunicorn. A
 - `cortex/security.py` — `login_required`, email allowlist (`email_allowed`, `director_emails`)
 - `cortex/ai/openai_service.py` — lazy OpenAI client + the 4 AI features: `extract_meeting_insights`, `parse_checkpoint`, `generate_prep_agenda`, `generate_member_card`
 - `cortex/views/` — blueprints (all under `/api`): `auth` (local login + Google OAuth), `people` (people CRUD under `/api/people`), `sessions` (core 1:1 model: `/api/oneonones`, AI extraction, commitments, prep/agenda), `checkpoints` (Feedz-style checkpoints), `cards` (async batch flow generate-start/person/generate-finish over `card_jobs`), `connections` (integrações: Gmail OAuth somente-leitura com tokens persistidos na tabela `connections`; demais ferramentas "em breve")
+- `cortex/views/meetings.py` — reuniões de fóruns, participantes, decisões e ações revisadas (`meetings`, `meeting_participants`, `meeting_actions`). Análise sugere ações; a adoção é explícita e idempotente. `meeting_insights.py` valida a extração e sua atualidade; `meetings_context.py` compartilha contexto complementar com pautas e cards. Presença em fórum não implica autoria, responsabilidade ou avaliação individual. Indicadores de cadência/sentimento de 1:1s não incluem fóruns.
+- `cortex/assistant_context.py` — busca em todo o histórico de 1:1s, fóruns, notas e ações; `cortex/ai/assistant_service.py` valida as respostas ricas do assistente. Fontes de fóruns usam `meeting:ID` e `meeting_action:ID`.
 - `cortex/drop_legacy.py` — idempotent cleanup of old FeedbackAI tables
 
 Frontend: `static/` Alpine.js SPA with no build step (CDN). `/` serves `index.html`, `/login` serves `login.html`; logic in `static/js/app.js` + `auth.js`.

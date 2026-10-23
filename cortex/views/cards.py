@@ -18,6 +18,7 @@ from ..database import session_factory
 from .. import ai
 from .. import gmail as gmail_svc
 from ..security import login_required
+from ..meetings_context import format_meeting_context
 from .sessions import _collect_prep_data, _PERSON_FOR_PREP
 
 bp = Blueprint("cards", __name__, url_prefix="/api")
@@ -68,6 +69,14 @@ def _build_context(prep, email_scan=None):
 
     n_sessions = len(prep['recent_sessions'])
     lines.append(f"Registros de 1:1 considerados: {n_sessions}")
+    group_text = format_meeting_context({"meetings": prep.get("group_meetings") or [],
+                                         "actions": prep.get("meeting_actions") or []})
+    if group_text:
+        lines.append(f"Reuniões diversas associadas: {st.get('group_meetings_count', len(prep.get('group_meetings') or []))} "
+                     f"(contexto recente: {len(prep.get('group_meetings') or [])}).")
+        lines.append(f"Encaminhamentos de fóruns atribuídos em aberto: {st.get('open_meeting_actions', 0)} "
+                     f"(vencidos: {st.get('overdue_meeting_actions', 0)}).")
+        lines.append(group_text)
 
     for s in prep['recent_sessions'][:6]:
         lines.append(f"\n1:1 de {s['occurred_on']} ({s['title'] or 'sem título'}) "

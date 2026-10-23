@@ -9,6 +9,7 @@ from ..database import session_factory
 from .. import ai
 from .. import gmail as gmail_svc
 from ..security import login_required
+from ..meetings_context import load_meeting_context, format_meeting_context
 from ..transcripts import (load_transcript_people, normalize_transcript,
                            normalization_metadata, transcript_preview)
 
@@ -456,6 +457,20 @@ def _collect_prep_data(db, person_row):
             "private_notes": cp[3], "public_notes": cp[4], "source": cp[5],
         }
 
+    group_context = load_meeting_context(db, person_id=person_id)
+    # Context excerpts are bounded; profile counters represent all records.
+    group_counts = db.execute(text("""
+        SELECT
+            (SELECT COUNT(*) FROM meeting_actions
+             WHERE person_id = :pid AND status = 'open') AS open_actions,
+            (SELECT COUNT(*) FROM meeting_actions
+             WHERE person_id = :pid AND status = 'open' AND due_date < :today) AS overdue_actions,
+            (SELECT COUNT(*) FROM meetings m
+             WHERE EXISTS (SELECT 1 FROM meeting_participants mp
+                           WHERE mp.meeting_id = m.id AND mp.person_id = :pid)
+                OR EXISTS (SELECT 1 FROM meeting_actions ma
+                           WHERE ma.meeting_id = m.id AND ma.person_id = :pid)) AS meeting_count
+    """), {"pid": person_id, "today": date.today()}).fetchone()
     stats = {}
     if sessions:
         days = (date.today() - date.fromisoformat(sessions[0]["occurred_on"])).days
@@ -464,6 +479,9 @@ def _collect_prep_data(db, person_row):
         stats["days_since_last"] = None
     stats["open_count"] = len(commitments)
     stats["overdue_count"] = sum(1 for c in commitments if c["is_overdue"])
+    stats["open_meeting_actions"] = group_counts[0]
+    stats["overdue_meeting_actions"] = group_counts[1]
+    stats["group_meetings_count"] = group_counts[2]
 
     trend = None
     scores = [_SENTIMENT_SCORE.get(s["sentiment"]) for s in sessions[:2]]
@@ -489,6 +507,8 @@ def _collect_prep_data(db, person_row):
         "stats": stats,
         "commitments": commitments,
         "recent_sessions": sessions,
+        "group_meetings": group_context["meetings"],
+        "meeting_actions": group_context["actions"],
         "last_checkpoint": checkpoint,
         "emails": {"scanned": False, "skipped": None, "thread_count": 0,
                    "pendencias": [], "todos": [], "assuntos": []},
@@ -658,6 +678,15 @@ def person_agenda(person_id):
             lines.append(f"- Ação: {a.get('acao') or a.get('action')} — Responsável: {who}")
         if cp['public_notes']:
             lines.append(f"Notas públicas: {cp['public_notes']}")
+
+    group_text = format_meeting_context({"meetings": prep.get("group_meetings") or [],
+                                         "actions": prep.get("meeting_actions") or []})
+    if group_text:
+        lines.append(f"Reuniões diversas associadas: {st.get('group_meetings_count', len(prep.get('group_meetings') or []))}; "
+                     f"contexto recente: {len(prep.get('group_meetings') or [])}. "
+                     f"Encaminhamentos atribuídos em aberto: {st.get('open_meeting_actions', 0)} "
+                     f"(vencidos: {st.get('overdue_meeting_actions', 0)}).")
+        lines.append(group_text)
 
     em = prep.get('emails') or {}
     if em.get('pendencias') or em.get('todos') or em.get('assuntos'):

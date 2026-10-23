@@ -1,6 +1,6 @@
 # Cortex — Copiloto de Gestão 1:1 e Performance
 
-Sistema web para apoio à gestão de um time de Inteligência Artificial: registro de reuniões 1:1 com transcrição, preparação inteligente das próximas conversas, checkpoints no formato Feedz e cards de acompanhamento do time gerados por IA.
+Sistema web para apoio à gestão de um time de Inteligência Artificial: registro de 1:1s e reuniões com diferentes fóruns, transcrições, decisões e ações, preparação das próximas conversas, checkpoints Feedz e cards de acompanhamento gerados por IA.
 
 Sistema single-user: apenas o diretor autentica via Google (allowlist TOTVS); liderados são perfis sem login.
 
@@ -59,9 +59,21 @@ O encontro precisa ter um título como `1:1`, `1x1`, `1-1`, `1/1`, `1on1`, `one-
 
 Referência da API: [Events: list — Google Calendar](https://developers.google.com/workspace/calendar/api/v3/reference/events/list).
 
+### Reuniões de fóruns, estratégia e execução
+
+Em **Reuniões**, registre título, fórum, data, participantes cadastrados, convidados externos, transcrição e notas. Os convidados não precisam de um perfil no time nem de login. A busca permite reencontrar reuniões por assunto, fórum, participante e período.
+
+Depois de salvar, use **Analisar com IA** para extrair síntese, temas estratégicos, decisões, riscos, oportunidades, questões em aberto e propostas de encaminhamento. As propostas só viram ações acompanhadas depois da sua revisão: confirme descrição, responsável e prazo e adicione a ação. Também é possível cadastrar ações manualmente e atualizar seu status. Uma reextração preserva as ações já registradas.
+
+O dashboard reúne os fóruns recentes, sinais estratégicos e ações abertas/vencidas. A participação em fóruns e as ações atribuídas aparecem no acompanhamento individual; pautas de 1:1 e novos cards usam essas evidências como contexto complementar. Estar presente em uma reunião não implica autoria de uma fala, responsabilidade por uma ação ou avaliação individual de um problema coletivo. Cadência e sentimento de 1:1s continuam calculados a partir dos 1:1s.
+
+O assistente pesquisa também as transcrições, notas, decisões e ações dessas reuniões, com fontes identificadas como `meeting:ID` e `meeting_action:ID`. Ao editar o conteúdo ou os participantes de uma reunião, a análise anterior é sinalizada como desatualizada e deixa de alimentar análises; a fonte atual permanece consultável. Para atualizar snapshots existentes dos Cards do Time, gere os cards novamente após registrar ou alterar reuniões relevantes.
+
+**Atualização da base existente:** execute `uv run --env-file .env python -m cortex.init_db` antes de servir a versão nova. Para executar diretamente no servidor de banco ou no SQL Editor do Supabase, use [scripts/migrate_forum_meetings.sql](scripts/migrate_forum_meetings.sql). O script cria `meetings`, `meeting_participants`, `meeting_actions` e seus índices, sem alterar os registros anteriores.
+
 ### Assistente flutuante Cortex IA
 
-O botão **Cortex IA**, no canto inferior direito, abre uma conversa disponível em todas as seções. Pergunte sobre desafios do time, pontos de atenção de uma pessoa, combinados ou estrutura organizacional. O assistente consulta perfis, transcrições completas, resumos, notas, checkpoints, combinados e o Gmail conectado do diretor. A conversa fica somente na memória da página; **Nova conversa** limpa o histórico.
+O botão **Cortex IA**, no canto inferior direito, abre uma conversa disponível em todas as seções. Pergunte sobre desafios do time, pontos de atenção, combinados, estrutura organizacional ou planos estratégicos e táticos. O assistente consulta perfis, transcrições completas de 1:1s e fóruns, resumos, notas, decisões, ações, checkpoints, combinados e o Gmail conectado do diretor. A conversa fica somente na memória da página; **Nova conversa** limpa o histórico.
 
 As buscas percorrem todas as datas do banco e selecionam trechos por relevância, incluindo passagens no interior de transcrições longas. A resposta apresenta fontes consultáveis e informa cortes de contexto. Gmail é consultado por pessoa ou assunto, sem corte temporal fixo, com até 8 conversas, 48 mensagens e orçamento de 16 segundos por pergunta. Limites, falhas e conexão ausente são indicados na conversa; uma seleção parcial não equivale a uma auditoria completa da caixa ou do histórico.
 
@@ -107,16 +119,18 @@ cortex/
 ├── transcripts.py      # dicionário de grafias e correção de nomes antes da análise
 ├── assistant_context.py # recuperação de evidências e cobertura do assistente
 ├── assistant_gmail.py  # busca Gmail do assistente, somente leitura
+├── meeting_insights.py # extração de decisões, estratégia e encaminhamentos de fóruns
+├── meetings_context.py # contexto complementar de reuniões e ações por participante
 ├── ai/                 # camada OpenAI e respostas estruturadas do assistente
 ├── views/              # blueprints: auth, people, sessions,
-│                       #   checkpoints, cards, connections
+│                       #   meetings, checkpoints, cards, connections, assistant, dashboard
 └── drop_legacy.py      # limpeza idempotente das tabelas antigas
 static/                 # SPA Alpine.js (index.html + login.html)
 ```
 
 - **Startup resiliente**: falta de configuração não derruba a aplicação; `/healthz` verifica o banco em modo somente-leitura e retorna HTTP 200 (`ok`) ou 503 (`degraded`). Sem `SESSION_SECRET` válido na Vercel, a API retorna 503 até a configuração ser corrigida.
 - **Banco serverless**: não há DDL em cada cold start da Vercel; conexões usam o Transaction Pooler do Supabase, sem pool ocioso dentro da função.
-- **Schema**: `users` (diretor) + `people`, `one_on_ones`, `commitments`, `checkpoints`, `card_jobs`, `member_cards`, `connections`.
+- **Schema**: `users` (diretor) + `people`, `one_on_ones`, `commitments`, `meetings`, `meeting_participants`, `meeting_actions`, `checkpoints`, `card_jobs`, `member_cards`, `connections`.
 
 ## Roadmap
 

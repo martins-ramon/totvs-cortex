@@ -49,7 +49,7 @@ def create_app():
     CORS(app, supports_credentials=True)
 
     from .views import auth, people
-    from .views import sessions, checkpoints, cards, connections, dashboard, assistant
+    from .views import sessions, checkpoints, cards, connections, dashboard, assistant, meetings
     app.register_blueprint(auth.bp)
     app.register_blueprint(people.bp)
     app.register_blueprint(sessions.bp)
@@ -58,6 +58,7 @@ def create_app():
     app.register_blueprint(connections.bp)
     app.register_blueprint(dashboard.bp)
     app.register_blueprint(assistant.bp)
+    app.register_blueprint(meetings.bp)
 
     @app.route('/')
     def index():

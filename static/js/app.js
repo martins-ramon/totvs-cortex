@@ -6,6 +6,7 @@ let _dashCharts = {};
 
 function cortexApp() {
     return {
+        ...cortexMeetings(),
         // --- estado ---
         booted: false,
         user: null,
@@ -20,6 +21,10 @@ function cortexApp() {
         calendarRequestId: 0,
         recentSessions: [],
         dash: null,
+        get meetingContext() {
+            const context = this.dash?.meeting_context || {};
+            return { kpis: {}, strategic_themes: [], decisions: [], risks: [], opportunities: [], actions: [], ...context };
+        },
 
         currentPerson: null,
         currentTab: 'sessions',
@@ -65,7 +70,7 @@ function cortexApp() {
             stepDetail: '', stepsDone: []
         },
         cardSteps: [
-            { key: 'sessions', label: 'Avaliando registros de 1:1s e checkpoints' },
+            { key: 'sessions', label: 'Avaliando 1:1s, checkpoints e reuniões vinculadas' },
             { key: 'emails', label: 'Avaliando e-mails da caixa de entrada' },
             { key: 'synthesize', label: 'Sintetizando o card com IA' }
         ],
@@ -142,6 +147,7 @@ function cortexApp() {
             if (view !== 'person') this.expandedId = null;
             if (view === 'people') { this.loadPeople(); this.loadRecentSessions(); }
             if (view === 'dashboard') this.loadDashboard();
+            if (view === 'meetings') this.loadMeetings();
         },
 
         toggleSidebar() {
@@ -299,6 +305,9 @@ function cortexApp() {
             this.currentTab = 'sessions';
             this.expandedId = null;
             this.view = 'person';
+            this.personMeetings = [];
+            this.personMeetingActions = [];
+            this.loadPersonMeetings(p.id);
             await this.loadPersonData();
         },
 

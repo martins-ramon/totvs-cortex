@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from cortex import assistant_context as context, assistant_gmail
+from cortex.meeting_insights import source_fingerprint
 
 
 def response(body, status=200):
@@ -33,6 +34,14 @@ class AssistantContextTests(unittest.TestCase):
             """CREATE TABLE checkpoints (id INTEGER PRIMARY KEY, person_id INTEGER, checkpoint_date TEXT,
                period_start TEXT, period_end TEXT, actions_json TEXT, private_notes TEXT,
                public_notes TEXT, raw_input TEXT)""",
+            """CREATE TABLE meetings (id INTEGER PRIMARY KEY, title TEXT, forum TEXT, occurred_on TEXT,
+               external_participants TEXT, transcript_raw TEXT, notes TEXT, summary_ai TEXT,
+               topics TEXT, extraction_json TEXT)""",
+            """CREATE TABLE meeting_participants (meeting_id INTEGER, person_id INTEGER,
+               PRIMARY KEY (meeting_id, person_id))""",
+            """CREATE TABLE meeting_actions (id INTEGER PRIMARY KEY, meeting_id INTEGER, person_id INTEGER,
+               description TEXT, owner_name TEXT, due_date TEXT, status TEXT, closed_at TEXT,
+               created_at TEXT)""",
         ]
         with self.engine.begin() as db:
             for statement in ddl:
@@ -60,6 +69,119 @@ class AssistantContextTests(unittest.TestCase):
     def meeting(self, record_id, person_id, date, transcript, **extra):
         self.insert("one_on_ones", {"id": record_id, "person_id": person_id,
                                    "occurred_on": date, "transcript_raw": transcript, **extra})
+
+    def forum_meeting(self, record_id, participant_ids, **extra):
+        values = {"id": record_id, "title": "Fórum de produto", "forum": "Planejamento",
+                  "occurred_on": "2018-01-10", "transcript_raw": "Discussão sobre capacidade.", **extra}
+        self.insert("meetings", values)
+        for person_id in participant_ids:
+            self.insert("meeting_participants", {"meeting_id": record_id, "person_id": person_id})
+        return values
+
+    def test_group_history_uses_declared_participant_alias_without_duplicating_meeting(self):
+        transcript = "Tema de rotina. " * 5000 + "LYNN Studio precisa ampliar autonomia."
+        self.forum_meeting(1, [1, 2], transcript_raw=transcript)
+        for record_id in range(2, 13):
+            self.forum_meeting(record_id, [2], occurred_on="2026-10-20")
+        result = context.gather_context(7, "Quais são os desafios de ANDREH no LYNN Studio?")
+        group_sources = [s for s in result["sources"] if s["id"] == "meeting:1"]
+        self.assertEqual(len(group_sources), 1)
+        self.assertIn("ampliar autonomia", group_sources[0]["excerpt"])
+        self.assertEqual(group_sources[0]["participant_ids"], [1, 2])
+        self.assertEqual(group_sources[0]["meeting_id"], 1)
+        self.assertEqual(result["coverage"]["database"]["scanned_by_type"]["meeting"], 12)
+        # An unrelated alias-only query still finds participation, with no name in the transcript.
+        result = context.gather_context(7, "ANDREH")
+        self.assertIn("meeting:1", {s["id"] for s in result["sources"]})
+
+    def test_assigned_group_actions_retrieve_all_statuses_and_meeting_without_attendance(self):
+        self.forum_meeting(1, [2])
+        for record_id, status in enumerate(("open", "done", "cancelled"), 1):
+            self.insert("meeting_actions", {"id": record_id, "meeting_id": 1, "person_id": 1,
+                                           "description": "Revisar capacidade", "status": status})
+        result = context.gather_context(7, "ANDREH")
+        sources = {s["id"]: s for s in result["sources"]}
+        self.assertIn("meeting:1", sources)
+        self.assertEqual(sources["meeting:1"]["participant_ids"], [2])
+        labels = {"open": "em aberto", "done": "concluído", "cancelled": "cancelado"}
+        for record_id, status in enumerate(("open", "done", "cancelled"), 1):
+            source = sources[f"meeting_action:{record_id}"]
+            self.assertIn(f"Status: {labels[status]}", source["excerpt"])
+            self.assertEqual(source["person_id"], 1)
+
+    def test_group_excerpts_keep_readable_evidence_without_internal_analysis_metadata(self):
+        meeting = self.forum_meeting(1, [1, 2], notes="Comparar as alternativas.",
+                                     transcript_raw="ANDREH propôs revisar dependências.",
+                                     external_participants="Consultoria de produto", summary_ai="Resumo do fórum.",
+                                     topics=json.dumps(["Qualidade"]))
+        fingerprint = source_fingerprint(meeting, [{"id": 1, "full_name": "André Pasold"},
+                                                  {"id": 2, "full_name": "Ana Maria"}])
+        extraction = {"summary": "Resumo do fórum.", "topics": ["Autonomia"],
+                      "decisions": ["Revisar dependências de plataforma"],
+                      "risks": ["Capacidade limitada"], "opportunities": ["Reduzir retrabalho"],
+                      "strategic_themes": ["Evolução do LYNN Studio"],
+                      "open_questions": ["Qual a capacidade disponível?"],
+                      "source_fingerprint": fingerprint, "internal_secret": "do-not-expose",
+                      "actions": [{"description": "Mapear dependências", "owner_name": "André Pasold",
+                                   "person_id": 1, "due_date": "2026-11-01", "source_key": "secret-key"}]}
+        with self.engine.begin() as db:
+            db.execute(text("UPDATE meetings SET extraction_json = :extraction WHERE id = 1"),
+                       {"extraction": json.dumps(extraction)})
+        self.insert("meeting_actions", {"id": 1, "meeting_id": 1, "person_id": 1,
+                                       "description": "Validar prioridades", "status": "open", "due_date": "2026-11-01"})
+        result = context.gather_context(7, "ANDREH")
+        sources = {s["id"]: s for s in result["sources"]}
+        excerpt = sources["meeting:1"]["excerpt"]
+        for expected in ("Participantes: André Pasold; Ana Maria", "Fórum: Planejamento",
+                         "Convidados: Consultoria de produto", "Anotações:", "Transcrição:",
+                         "André Pasold propôs", "Resumo:", "- Qualidade", "- Autonomia",
+                         "Decisões:\n- Revisar dependências de plataforma", "- Capacidade limitada",
+                         "- Reduzir retrabalho", "- Evolução do LYNN Studio",
+                         "- Qual a capacidade disponível?", "Mapear dependências",
+                         "Responsável: André Pasold; prazo: 2026-11-01"):
+            self.assertIn(expected, excerpt)
+        for internal in ("source_fingerprint", fingerprint, "source_key", "secret-key", "do-not-expose",
+                         "transcript_raw", "extraction_json", "person_id", '"full_name"'):
+            self.assertNotIn(internal, excerpt)
+        action = sources["meeting_action:1"]
+        self.assertIn("Encaminhamento: Validar prioridades", action["excerpt"])
+        self.assertIn("Responsável: André Pasold", action["excerpt"])
+        self.assertIn("Reunião: Fórum de produto", action["excerpt"])
+        self.assertIn("Prazo: 2026-11-01", action["excerpt"])
+        self.assertNotIn("person_id", action["excerpt"])
+        self.assertNotIn("meeting_id", action["excerpt"])
+        self.assertEqual(action["meeting_id"], 1)
+        self.assertEqual(sources["meeting:1"]["participant_ids"], [1, 2])
+
+    def test_group_source_edit_omits_stale_analysis_and_keeps_current_raw_evidence(self):
+        meeting = {"id": 1, "title": "Fórum de produto", "forum": "Planejamento",
+                   "occurred_on": "2018-01-10", "transcript_raw": "Hipótese superada."}
+        extraction = {"summary": "Resumo inválido: unicórnios", "risks": ["unicórnios"],
+                      "source_fingerprint": source_fingerprint(meeting, [{"id": 1, "full_name": "André Pasold"}])}
+        self.forum_meeting(1, [1], transcript_raw="ANDREH definiu a revisão de qualidade.",
+                           notes="Analisar capacidade atual.", summary_ai="unicórnios",
+                           topics=json.dumps(["unicórnios"]), extraction_json=json.dumps(extraction))
+        result = context.gather_context(7, "ANDREH")
+        source = next(s for s in result["sources"] if s["id"] == "meeting:1")
+        self.assertIn("André Pasold definiu", source["excerpt"])
+        self.assertIn("capacidade atual", source["excerpt"])
+        self.assertIn("desatualizada omitida", source["excerpt"])
+        self.assertNotIn("unicórnios", source["excerpt"])
+        result = context.gather_context(7, "unicórnios")
+        self.assertNotIn("meeting:1", {s["id"] for s in result["sources"]})
+
+    def test_group_rich_followup_uses_real_sources_and_attendee_scope(self):
+        self.forum_meeting(1, [1, 2])
+        self.insert("meeting_actions", {"id": 1, "meeting_id": 1, "person_id": 1,
+                                       "description": "Revisar capacidade", "status": "open"})
+        history = [{"role": "user", "content": "Qual o plano de capacidade do André Pasold?"},
+                   {"role": "assistant", "content": json.dumps({
+                       "source_ids": ["meeting:1", "meeting_action:1", "meeting_action:99999"]})}]
+        result = context.gather_context(7, "Detalhe o primeiro item da tabela do André Pasold", history)
+        # A named person narrows follow-ups only when represented in the sources.
+        self.assertEqual(result["coverage"]["conversation_source_hints"], ["meeting:1", "meeting_action:1"])
+        result = context.gather_context(7, "Detalhe o primeiro item da tabela", history)
+        self.assertEqual(result["coverage"]["conversation_source_hints"], ["meeting:1", "meeting_action:1"])
 
     def test_old_long_transcript_is_searched_beyond_prefix_and_recent_records(self):
         long_text = ("Conversa de rotina sobre entregas. " * 5000

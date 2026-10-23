@@ -87,6 +87,8 @@ uv run --env-file .env python -m cortex.init_db
 
 O comando é idempotente, preserva dados e termina com código 0 quando todas as etapas concluem. Não execute o comando de remoção de tabelas legadas durante esta migração.
 
+Para instalações já em uso que precisam somente do módulo de reuniões de fóruns, [scripts/migrate_forum_meetings.sql](scripts/migrate_forum_meetings.sql) contém o SQL idempotente para executar diretamente no PostgreSQL/Supabase. Aplique antes de publicar a nova versão; `/healthz` verifica também as tabelas de reuniões, participantes e ações.
+
 ## 6. Faça deploy e valide
 
 Após cadastrar as variáveis e callbacks, use **Deploy** ou **Redeploy** na Vercel. Abra a URL de produção definida em `APP_BASE_URL`.
@@ -97,6 +99,7 @@ Após cadastrar as variáveis e callbacks, use **Deploy** ou **Redeploy** na Ver
 4. Confira Gmail e Google Agenda em **Conexões** e o próximo 1:1 em **Meu Time**.
 5. Gere um card e uma pauta com IA. Esses testes consomem as APIs conforme o uso normal.
 6. Crie e edite um registro de teste, recarregue a página e confirme sua persistência; remova o registro de teste ao terminar.
+7. Registre uma reunião de fórum, associe participantes e analise o conteúdo. Revise e adicione uma ação sugerida, altere seu status e confira o contexto no dashboard, perfil do participante, pauta e assistente.
 
 O diagnóstico verifica presença das chaves e acesso ao banco; não comprova a validade das credenciais OpenAI/Google. Os testes funcionais acima completam essa validação.
 
