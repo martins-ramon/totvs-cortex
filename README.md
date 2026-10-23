@@ -59,6 +59,18 @@ O encontro precisa ter um título como `1:1`, `1x1`, `1-1`, `1/1`, `1on1`, `one-
 
 Referência da API: [Events: list — Google Calendar](https://developers.google.com/workspace/calendar/api/v3/reference/events/list).
 
+### Assistente flutuante Cortex IA
+
+O botão **Cortex IA**, no canto inferior direito, abre uma conversa disponível em todas as seções. Pergunte sobre desafios do time, pontos de atenção de uma pessoa, combinados ou estrutura organizacional. O assistente consulta perfis, transcrições completas, resumos, notas, checkpoints, combinados e o Gmail conectado do diretor. A conversa fica somente na memória da página; **Nova conversa** limpa o histórico.
+
+As buscas percorrem todas as datas do banco e selecionam trechos por relevância, incluindo passagens no interior de transcrições longas. A resposta apresenta fontes consultáveis e informa cortes de contexto. Gmail é consultado por pessoa ou assunto, sem corte temporal fixo, com até 8 conversas, 48 mensagens e orçamento de 16 segundos por pergunta. Limites, falhas e conexão ausente são indicados na conversa; uma seleção parcial não equivale a uma auditoria completa da caixa ou do histórico.
+
+Além do texto, a IA pode retornar **organogramas, tabelas e gráficos de barras**. Vínculos hierárquicos precisam estar documentados nas fontes; sem evidência, os nós aparecem independentes e a resposta explica a lacuna. Os componentes recebem apenas dados validados; HTML e código gerados pelo modelo não são executados. A integração usa [Structured Outputs da OpenAI](https://developers.openai.com/api/docs/guides/structured-outputs).
+
+Pedidos explícitos podem preparar a **criação ou conclusão de um combinado**. Revise a pessoa, descrição, responsável e prazo e use **Confirmar e executar** para salvar. A proposta expira em 15 minutos; repetições da mesma ação não duplicam combinados. O Gmail permanece somente leitura: o assistente pode redigir um e-mail no chat, mas não enviá-lo.
+
+**Atualização de instalações existentes:** execute `uv run --env-file .env python -m cortex.init_db` antes de servir esta versão. O comando adiciona `commitments.assistant_request_id` e seu índice único para impedir duplicações em tentativas repetidas. Não é necessária uma nova variável de ambiente ou extensão no Postgres.
+
 ### Correção de nomes nas transcrições
 
 Em **Meu Time → Editar pessoa → Grafias do nome nas transcrições**, cadastre as variações que o Meet costuma produzir, uma por linha (até 20). Por exemplo:
@@ -93,7 +105,9 @@ cortex/
 ├── oauth.py            # origem dos callbacks e credenciais Google em runtime
 ├── security.py         # allowlist de e-mails + login_required
 ├── transcripts.py      # dicionário de grafias e correção de nomes antes da análise
-├── ai/                 # camada OpenAI (4 features de IA)
+├── assistant_context.py # recuperação de evidências e cobertura do assistente
+├── assistant_gmail.py  # busca Gmail do assistente, somente leitura
+├── ai/                 # camada OpenAI e respostas estruturadas do assistente
 ├── views/              # blueprints: auth, people, sessions,
 │                       #   checkpoints, cards, connections
 └── drop_legacy.py      # limpeza idempotente das tabelas antigas
