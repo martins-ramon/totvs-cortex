@@ -13,12 +13,6 @@ function cortexAssistant() {
         assistantSourceTrigger: null,
         assistantActionBusy: '',
         assistantSequence: 0,
-        assistantPrompts: [
-            'A partir dos 1:1s, qual é o principal desafio de evolução do LYNN Studio?',
-            'Quais são os principais pontos de atenção levantados pelo André Pasold?',
-            'Como está a estrutura do Alestan? Mostre um organograma.'
-        ],
-
         toggleAssistant() {
             if (this.assistantOpen) return this.closeAssistant();
             this.assistantOpen = true;

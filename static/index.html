@@ -1035,19 +1035,6 @@
             </header>
 
             <div class="assistant-feed" x-ref="assistantFeed" role="log" aria-label="Conversa com Cortex IA" :aria-busy="assistantBusy" :inert="!!assistantSelectedSource">
-                <div class="assistant-intro" x-show="!assistantMessages.length">
-                    <span class="assistant-eyebrow">Seu contexto, conectado</span>
-                    <h3>O que vamos entender<br>sobre o seu time?</h3>
-                    <p>Consulte transcrições, combinados e e-mails disponíveis no Gmail conectado. Explore respostas com fontes, gráficos e organogramas.</p>
-                    <div class="assistant-suggestions">
-                        <template x-for="(prompt, index) in assistantPrompts" :key="index">
-                            <button type="button" class="assistant-suggestion" @click="sendAssistant(prompt)" :disabled="assistantBusy">
-                                <span class="assistant-suggestion-icon" aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M4 18V6m5 12v-7m5 7V8m5 10V4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span><span x-text="prompt"></span>
-                            </button>
-                        </template>
-                    </div>
-                </div>
-
                 <template x-for="message in assistantMessages" :key="message.id">
                     <article class="assistant-message" :class="'assistant-message-' + message.role">
                         <span class="assistant-message-label" x-text="message.role === 'user' ? 'Você' : 'Cortex IA'"></span>
