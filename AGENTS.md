@@ -45,4 +45,5 @@ Frontend: `static/` Alpine.js SPA with no build step (CDN). `/` serves `index.ht
 - Google OAuth: login usa `/api/auth/google/callback`; conexão Gmail usa `/api/connections/gmail/callback` (ambos precisam estar nas Authorized redirect URIs do Google Cloud). Credenciais lidas em runtime via `_google_creds()` (testável).
 - Views da SPA são client-side (`view==='...'` no Alpine), NÃO rotas Flask. Qualquer URL que o backend usa como destino de redirect (ex.: `/connections?connected=...` pós-OAuth) precisa de uma rota explícita em `cortex/__init__.py` servindo `index.html`, senão 404.
 - All UI text and AI-generated content is Brazilian Portuguese (pt-BR).
+- Reuniões: criação, edição e extração sincronizam participantes identificados em falas/listas de presença da transcrição ou notas via `meeting_participants.py`. A detecção vincula somente perfis existentes e nomes sem ambiguidade; menções a terceiros não bastam. Preserve a sincronização antes do fingerprint da extração, sem modificar a fonte original.
 - `attached_assets/` contains Replit-agent prompt dumps; ignore it.

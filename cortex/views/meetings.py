@@ -9,6 +9,7 @@ from sqlalchemy import bindparam, text
 from ..database import session_factory
 from ..meeting_insights import (analysis_stale, decode_json, extract_forum_insights,
                                 source_fingerprint)
+from ..meeting_participants import detect_meeting_participants
 from ..meetings_context import iso, load_participants, serialize_action
 from ..security import login_required
 from ..transcripts import load_transcript_people
@@ -87,6 +88,16 @@ def _replace_participants(db, mid, ids):
     for pid in ids:
         db.execute(text('INSERT INTO meeting_participants (meeting_id, person_id) VALUES (:mid, :pid)'),
                    {'mid': mid, 'pid': pid})
+
+
+def _merge_detected_participants(meeting, selected_ids, people):
+    detection = detect_meeting_participants(
+        meeting.get('transcript_raw'), meeting.get('notes'), people)
+    selected = set(selected_ids)
+    discovered = set(detection['participant_ids']) - selected
+    added = [{'id': person['id'], 'full_name': person['full_name']}
+             for person in people if person['id'] in discovered]
+    return sorted(selected | discovered), added
 
 
 def _load(db, mid, lock=False):
@@ -202,11 +213,12 @@ def create_meeting():
     try:
         ids = values.pop('participant_ids')
         _validate_people(db, ids)
+        ids, added = _merge_detected_participants(values, ids, load_transcript_people(db))
         keys = list(values)
         mid = db.execute(text(f"INSERT INTO meetings ({', '.join(keys)}) VALUES ({', '.join(':' + k for k in keys)}) RETURNING id"), values).fetchone()[0]
         _replace_participants(db, mid, ids)
         db.commit()
-        return jsonify({'success': True, 'meeting_id': mid}), 201
+        return jsonify({'success': True, 'meeting_id': mid, 'auto_added_participants': added}), 201
     except ValueError as exc:
         db.rollback()
         return jsonify({'error': str(exc)}), 400
@@ -238,16 +250,22 @@ def update_meeting(mid):
         return jsonify({'error': str(exc)}), 400
     db = session_factory()
     try:
-        if db.execute(text('SELECT id FROM meetings WHERE id = :mid FOR UPDATE'), {'mid': mid}).fetchone() is None:
+        row = db.execute(text('SELECT * FROM meetings WHERE id = :mid FOR UPDATE'),
+                         {'mid': mid}).mappings().first()
+        if row is None:
             return jsonify({'error': 'Reunião não encontrada.'}), 404
         ids = values.pop('participant_ids', None)
         if ids is not None:
             _validate_people(db, ids)
-            _replace_participants(db, mid, ids)
+        else:
+            ids = [person['id'] for person in load_participants(db, mid)]
+        ids, added = _merge_detected_participants(
+            {**dict(row), **values}, ids, load_transcript_people(db))
+        _replace_participants(db, mid, ids)
         sets = [f'{key} = :{key}' for key in values] + ['updated_at = CURRENT_TIMESTAMP']
         db.execute(text(f"UPDATE meetings SET {', '.join(sets)} WHERE id = :mid"), {**values, 'mid': mid})
         db.commit()
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'auto_added_participants': added})
     except ValueError as exc:
         db.rollback()
         return jsonify({'error': str(exc)}), 400
@@ -277,13 +295,23 @@ def delete_meeting(mid):
 def extract_meeting(mid):
     db = session_factory()
     try:
-        meeting = _load(db, mid)
+        meeting = _load(db, mid, lock=True)
         if meeting is None:
             return jsonify({'error': 'Reunião não encontrada.'}), 404
         if not (meeting.get('transcript_raw') or meeting.get('notes')):
             return jsonify({'error': 'Registre uma transcrição ou notas para analisar.'}), 400
         people = load_transcript_people(db)
+        ids, added = _merge_detected_participants(meeting, meeting['participant_ids'], people)
+        if added:
+            _replace_participants(db, mid, ids)
+            db.execute(text('UPDATE meetings SET updated_at = CURRENT_TIMESTAMP WHERE id = :mid'), {'mid': mid})
+            meeting['participants'] = load_participants(db, mid)
+            meeting['participant_ids'] = [person['id'] for person in meeting['participants']]
+            # Vínculos identificados são preservados mesmo se a IA ficar indisponível.
+            db.commit()
         fingerprint = source_fingerprint(meeting, meeting['participants'])
+    except Exception as exc:
+        return _error(db, exc)
     finally:
         db.close()
     try:

@@ -127,6 +127,95 @@ class MeetingTests(unittest.TestCase):
         self.assertNotIn('transcript_raw', response.json['meetings'][0])
         self.assertEqual(response.json['forums'], ['Fórum de produto'])
 
+    def test_create_links_unselected_participants_from_transcript_and_notes(self):
+        response = self.client.post('/api/meetings', json={
+            'title': 'Planejamento', 'occurred_on': '2026-10-20',
+            'participant_ids': [], 'transcript_raw': 'André Pasold: Vamos revisar o plano.',
+            'notes': 'Participantes: Outra Pessoa',
+        })
+        self.assertEqual(response.status_code, 201, response.json)
+        mid = response.json['meeting_id']
+        self.assertEqual(self.read(mid)['participant_ids'], [1, 2])
+        self.assertEqual({p['id'] for p in response.json['auto_added_participants']}, {1, 2})
+        self.assertEqual(self.client.get('/api/meetings?person_id=2').json['total'], 1)
+        db = self.new_session()
+        try:
+            context = load_meeting_context(db, person_id=2)
+            self.assertEqual([m['id'] for m in context['meetings']], [mid])
+        finally:
+            db.close()
+
+    def test_update_adds_detected_participants_without_replacing_omitted_selection(self):
+        mid = self.create()
+        response = self.client.put(f'/api/meetings/{mid}', json={
+            'notes': 'Participantes: Outra Pessoa',
+        })
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(self.read(mid)['participant_ids'], [1, 2])
+        self.assertEqual([p['id'] for p in response.json['auto_added_participants']], [2])
+        # Uma gravação repetida preserva os vínculos sem duplicá-los.
+        self.assertEqual(self.client.put(f'/api/meetings/{mid}', json={
+            'notes': 'Participantes: Outra Pessoa',
+        }).status_code, 200)
+        with self.engine.connect() as conn:
+            self.assertEqual(conn.execute(text(
+                'SELECT COUNT(*) FROM meeting_participants WHERE meeting_id = :mid'),
+                {'mid': mid}).scalar(), 2)
+
+    def test_explicit_selection_replaces_manual_links_and_retains_detected_people(self):
+        mid = self.create(notes='Participantes: Outra Pessoa')
+        response = self.client.put(f'/api/meetings/{mid}', json={'participant_ids': []})
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(self.read(mid)['participant_ids'], [2])
+
+    def test_clearing_source_does_not_remove_existing_participants(self):
+        mid = self.create(notes='Participantes: Outra Pessoa')
+        response = self.client.put(f'/api/meetings/{mid}', json={
+            'notes': None, 'transcript_raw': None,
+        })
+        self.assertEqual(response.status_code, 200, response.json)
+        meeting = self.read(mid)
+        self.assertEqual(meeting['participant_ids'], [1, 2])
+        self.assertIsNone(meeting['notes'])
+        self.assertIsNone(meeting['transcript_raw'])
+
+    def test_a_person_mentioned_without_evidence_of_attendance_is_not_linked(self):
+        mid = self.create(notes='Precisamos consultar Outra Pessoa na próxima semana.')
+        self.assertEqual(self.read(mid)['participant_ids'], [1])
+
+    def test_extraction_reconciles_legacy_participants_before_building_model_context(self):
+        mid = self.create(participant_ids=[], notes=None,
+                          transcript_raw='André Pasold: Vamos revisar o plano.')
+        # Simula um registro anterior à identificação automática de participantes.
+        with self.engine.begin() as conn:
+            conn.execute(text('DELETE FROM meeting_participants WHERE meeting_id = :mid'), {'mid': mid})
+
+        def extract(meeting, participants, people):
+            self.assertTrue(self.sessions[-1].closed)
+            self.assertEqual([p['id'] for p in participants], [1])
+            self.assertEqual(meeting['participant_ids'], [1])
+            return normalize_extraction({'summary': 'Plano revisado.', 'actions': [
+                {'description': 'Revisar plano', 'owner_name': 'André Pasold'}]}, participants)
+
+        with patch.object(meetings, 'extract_forum_insights', side_effect=extract):
+            response = self.client.post(f'/api/meetings/{mid}/extract')
+        self.assertEqual(response.status_code, 200, response.json)
+        meeting = response.json['meeting']
+        self.assertEqual(meeting['participant_ids'], [1])
+        self.assertEqual(meeting['extraction']['actions'][0]['person_id'], 1)
+        self.assertFalse(meeting['analysis_stale'])
+
+    def test_legacy_participant_detection_survives_an_ai_failure(self):
+        mid = self.create(participant_ids=[], notes='Participantes: Outra Pessoa',
+                          transcript_raw=None)
+        with self.engine.begin() as conn:
+            conn.execute(text('DELETE FROM meeting_participants WHERE meeting_id = :mid'), {'mid': mid})
+        with patch.object(meetings, 'extract_forum_insights', side_effect=RuntimeError('indisponível')):
+            response = self.client.post(f'/api/meetings/{mid}/extract')
+        self.assertEqual(response.status_code, 502, response.json)
+        self.assertEqual(self.read(mid)['participant_ids'], [2])
+        self.assertIsNone(self.read(mid)['extraction'])
+
     def test_invalid_fields_do_not_persist(self):
         for changes in [{'title': ''}, {'occurred_on': 'not-a-date'}, {'participant_ids': [True]},
                         {'participant_ids': ['1']}, {'participant_ids': [999]}, {'notes': []}]:
@@ -352,7 +441,8 @@ class MeetingInsightTests(unittest.TestCase):
         client = app.test_client()
         with client.session_transaction() as session:
             session['user_id'] = 1
-        with patch.object(meetings,'session_factory',return_value=db):
+        with patch.object(meetings,'session_factory',return_value=db), \
+                patch.object(meetings, 'load_transcript_people', return_value=[]):
             response = client.post('/api/meetings',json={'title':'Plano','occurred_on':'2026-10-20'})
         self.assertEqual(response.status_code,201,response.json)
         self.assertEqual(response.json['meeting_id'],55)
