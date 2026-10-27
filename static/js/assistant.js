@@ -1,4 +1,4 @@
-/* Assistente Cortex: conversa em memória e componentes visuais sem HTML gerado pela IA. */
+/* Assistente Cortex: conversa, memórias persistentes e componentes visuais sem HTML gerado pela IA. */
 function cortexAssistant() {
     return {
         assistantOpen: false,
@@ -12,6 +12,13 @@ function cortexAssistant() {
         assistantSelectedSource: null,
         assistantSourceTrigger: null,
         assistantActionBusy: '',
+        assistantMemoriesOpen: false,
+        assistantMemories: [],
+        assistantMemoriesLoading: false,
+        assistantMemoriesError: '',
+        assistantMemoriesStatus: '',
+        assistantMemoriesRequestSequence: 0,
+        assistantMemoryDeleteId: null,
         assistantSequence: 0,
         toggleAssistant() {
             if (this.assistantOpen) return this.closeAssistant();
@@ -22,6 +29,7 @@ function cortexAssistant() {
         closeAssistant() {
             this.assistantOpen = false;
             this.assistantSelectedSource = null;
+            this.assistantMemoriesOpen = false;
             this.$nextTick(() => this.$refs.assistantLauncher.focus());
         },
 
@@ -31,6 +39,7 @@ function cortexAssistant() {
             if (!this.$refs.assistantPanel.contains(event.target)) return;
             event.stopPropagation();
             if (this.assistantSelectedSource) this.closeAssistantSource();
+            else if (this.assistantMemoriesOpen) this.closeAssistantMemories();
             else this.closeAssistant();
         },
 
@@ -51,12 +60,13 @@ function cortexAssistant() {
         },
 
         clearAssistant() {
-            if (this.assistantBusy || this.assistantActionBusy) return;
+            if (this.assistantBusy || this.assistantActionBusy || this.assistantMemoryDeleteId) return;
             this.assistantMessages = [];
             this.assistantError = '';
             this.assistantLastRequest = null;
             this.assistantLastUserId = null;
             this.assistantSelectedSource = null;
+            this.assistantMemoriesOpen = false;
             this.assistantDraft = '';
             this.$nextTick(() => this.$refs.assistantInput.focus());
         },
@@ -68,11 +78,11 @@ function cortexAssistant() {
             });
         },
 
-        async assistantRequest(path, payload) {
+        async assistantRequest(path, payload, method = 'POST') {
             const response = await fetch(path, {
-                method: 'POST', credentials: 'include',
+                method, credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                ...(payload === undefined ? {} : { body: JSON.stringify(payload) })
             });
             let data = {};
             try { data = await response.json(); } catch (_) { /* Uma falha pode não ter corpo JSON. */ }
@@ -82,6 +92,56 @@ function cortexAssistant() {
                     : (data.error || 'Não foi possível consultar o assistente. Tente novamente.'));
             }
             return data;
+        },
+
+        toggleAssistantMemories() {
+            if (this.assistantMemoriesOpen) return this.closeAssistantMemories();
+            this.assistantMemoriesOpen = true;
+            this.assistantSelectedSource = null;
+            this.assistantMemoriesStatus = '';
+            this.$nextTick(() => this.$refs.assistantMemoriesClose.focus());
+            this.loadAssistantMemories();
+        },
+
+        closeAssistantMemories() {
+            this.assistantMemoriesOpen = false;
+            this.$nextTick(() => this.$refs.assistantMemoriesButton.focus());
+        },
+
+        async loadAssistantMemories() {
+            const sequence = ++this.assistantMemoriesRequestSequence;
+            this.assistantMemoriesLoading = true;
+            this.assistantMemoriesError = '';
+            try {
+                const data = await this.assistantRequest('/api/assistant/memories', undefined, 'GET');
+                if (sequence === this.assistantMemoriesRequestSequence) {
+                    this.assistantMemories = Array.isArray(data.memories) ? data.memories : [];
+                }
+            } catch (error) {
+                if (sequence === this.assistantMemoriesRequestSequence) this.assistantMemoriesError = error.message;
+            } finally {
+                if (sequence === this.assistantMemoriesRequestSequence) this.assistantMemoriesLoading = false;
+            }
+        },
+
+        async forgetAssistantMemory(memory) {
+            if (this.assistantMemoryDeleteId || this.assistantBusy) return;
+            this.assistantMemoryDeleteId = memory.id;
+            this.assistantMemoriesError = '';
+            this.assistantMemoriesStatus = '';
+            try {
+                const data = await this.assistantRequest('/api/assistant/memories/' + memory.id, {}, 'DELETE');
+                // Ignora uma listagem iniciada antes da exclusão.
+                this.assistantMemoriesRequestSequence++;
+                this.assistantMemoriesLoading = false;
+                this.assistantMemories = this.assistantMemories.filter(item => item.id !== memory.id);
+                this.assistantMemoriesStatus = data.message || 'Memória removida.';
+                this.$nextTick(() => this.$refs.assistantMemoriesClose.focus());
+            } catch (error) {
+                this.assistantMemoriesError = error.message;
+            } finally {
+                this.assistantMemoryDeleteId = null;
+            }
         },
 
         assistantHistoryContent(message) {
@@ -174,7 +234,7 @@ function cortexAssistant() {
         },
 
         async sendAssistant(prompt = null, retry = false) {
-            if (this.assistantBusy || this.assistantActionBusy) return;
+            if (this.assistantBusy || this.assistantActionBusy || this.assistantMemoryDeleteId) return;
             const content = (prompt === null ? this.assistantDraft : prompt).trim();
             if (!content || content.length > 6000) return;
             if (!retry) {
@@ -200,8 +260,11 @@ function cortexAssistant() {
                     actions: Array.isArray(data.actions) ? data.actions.map(action => ({ ...action, state: 'pending', error: '' })) : [],
                     prompts: Array.isArray(data.suggested_prompts) ? data.suggested_prompts.filter(p => typeof p === 'string').slice(0, 3) : [],
                     warnings: Array.isArray(data.warnings) ? data.warnings.filter(w => typeof w === 'string') : [],
+                    memoryChanges: Array.isArray(data.memory_changes) ? data.memory_changes.filter(change =>
+                        change && ['saved', 'updated'].includes(change.status) && typeof change.subject === 'string') : [],
                     coverage: data.coverage || {}
                 });
+                if (this.assistantMemoriesOpen && data.memory_changes?.length) this.loadAssistantMemories();
                 this.assistantLastRequest = null;
             } catch (error) {
                 const userMessage = this.assistantMessages.find(message => message.id === this.assistantLastUserId);
@@ -210,7 +273,7 @@ function cortexAssistant() {
             } finally {
                 this.assistantBusy = false;
                 this.scrollAssistant();
-                if (this.assistantOpen) this.$nextTick(() => this.$refs.assistantInput.focus());
+                if (this.assistantOpen && !this.assistantMemoriesOpen) this.$nextTick(() => this.$refs.assistantInput.focus());
             }
         },
 
@@ -293,7 +356,7 @@ function cortexAssistant() {
         },
 
         assistantSourceName(type) {
-            return ({ transcript: 'Transcrição', one_on_one: '1:1', session: '1:1', commitment: 'Combinado', checkpoint: 'Checkpoint', email: 'E-mail', gmail: 'Gmail', person: 'Pessoa', card: 'Card do time', member_card: 'Card do time', meeting: 'Reunião de fórum', meeting_action: 'Ação de reunião' })[type] || 'Registro';
+            return ({ transcript: 'Transcrição', one_on_one: '1:1', session: '1:1', commitment: 'Combinado', checkpoint: 'Checkpoint', email: 'E-mail', gmail: 'Gmail', person: 'Pessoa', card: 'Card do time', member_card: 'Card do time', meeting: 'Reunião de fórum', meeting_action: 'Ação de reunião', memory: 'Memória' })[type] || 'Registro';
         },
 
         assistantSourceDate(value) {
@@ -334,12 +397,15 @@ function cortexAssistant() {
         assistantCoverage(coverage) {
             const entries = [];
             const labels = { people: 'pessoas', transcripts: 'transcrições', sessions: '1:1s', one_on_ones: '1:1s', commitments: 'combinados', checkpoints: 'checkpoints', emails: 'e-mails', cards: 'cards' };
-            const sourceLabels = { person: 'pessoas', one_on_one: '1:1s', transcript: 'transcrições', commitment: 'combinados', checkpoint: 'checkpoints', meeting: 'reuniões de fóruns', meeting_action: 'ações de reuniões', card: 'cards', member_card: 'cards' };
+            const sourceLabels = { person: 'pessoas', one_on_one: '1:1s', transcript: 'transcrições', commitment: 'combinados', checkpoint: 'checkpoints', meeting: 'reuniões de fóruns', meeting_action: 'ações de reuniões', card: 'cards', member_card: 'cards', memory: 'memórias' };
             const selected = coverage.database?.selected_by_type;
             if (selected && typeof selected === 'object') {
                 Object.entries(sourceLabels).forEach(([key, label]) => {
                     if (Number.isFinite(selected[key]) && selected[key] > 0) entries.push(selected[key].toLocaleString('pt-BR') + ' ' + label);
                 });
+                if (Number.isFinite(coverage.memory?.selected_count) && coverage.memory.selected_count > 0) {
+                    entries.push(coverage.memory.selected_count.toLocaleString('pt-BR') + (coverage.memory.selected_count === 1 ? ' memória' : ' memórias'));
+                }
                 if (coverage.gmail?.status === 'connected' || coverage.gmail?.message_count > 0) {
                     entries.push((coverage.gmail.message_count || 0).toLocaleString('pt-BR') + ' e-mails');
                 }

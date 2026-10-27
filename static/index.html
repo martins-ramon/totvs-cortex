@@ -1159,7 +1159,7 @@
         </div>
     </div>
 
-    <!-- Assistente: a conversa existe apenas enquanto esta página está aberta. -->
+    <!-- O histórico da conversa é temporário; memórias confirmadas são persistentes. -->
     <div class="cortex-assistant" x-data="cortexAssistant()" x-show="booted" @keydown.escape="assistantEscape($event)">
         <section class="assistant-panel" :class="{'is-expanded': assistantExpanded}" x-show="assistantOpen" x-cloak
                  id="assistant-panel" x-ref="assistantPanel" role="dialog" aria-modal="false" aria-labelledby="assistant-title" @keydown.tab="assistantTrapFocus($event)">
@@ -1167,7 +1167,8 @@
                 <span class="assistant-mark" aria-hidden="true"><svg width="23" height="23" viewBox="0 0 24 24" fill="none"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
                 <div class="assistant-header-title"><h2 id="assistant-title">Cortex IA</h2><p>Conecte as conversas. Encontre caminhos.</p></div>
                 <div class="assistant-header-actions">
-                    <button type="button" class="assistant-icon-button" @click="clearAssistant()" :disabled="assistantBusy || !!assistantActionBusy" title="Nova conversa" aria-label="Nova conversa">
+                    <button type="button" class="assistant-memories-button" x-ref="assistantMemoriesButton" @click="toggleAssistantMemories()" :aria-expanded="assistantMemoriesOpen" aria-controls="assistant-memories">Memórias</button>
+                    <button type="button" class="assistant-icon-button" @click="clearAssistant()" :disabled="assistantBusy || !!assistantActionBusy || !!assistantMemoryDeleteId" title="Nova conversa — mantém as memórias salvas" aria-label="Nova conversa — mantém as memórias salvas">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
                     </button>
                     <button type="button" class="assistant-icon-button assistant-expand-desktop" @click="assistantExpanded = !assistantExpanded" :title="assistantExpanded ? 'Recolher painel' : 'Ampliar painel'" :aria-label="assistantExpanded ? 'Recolher painel' : 'Ampliar painel'" :aria-expanded="assistantExpanded">
@@ -1179,7 +1180,25 @@
                 </div>
             </header>
 
-            <div class="assistant-feed" x-ref="assistantFeed" role="log" aria-label="Conversa com Cortex IA" :aria-busy="assistantBusy" :inert="!!assistantSelectedSource">
+            <section id="assistant-memories" class="assistant-memories-panel" x-show="assistantMemoriesOpen" role="region" aria-labelledby="assistant-memories-title" :aria-busy="assistantMemoriesLoading">
+                <div class="assistant-source-header"><div><small>Contexto para conversas futuras</small><h3 id="assistant-memories-title">Memórias do Assistente</h3></div><button type="button" class="assistant-icon-button" x-ref="assistantMemoriesClose" @click="closeAssistantMemories()" aria-label="Voltar para a conversa"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button></div>
+                <div class="assistant-memories-body">
+                    <p class="assistant-memory-help">Informações que você compartilha podem ser guardadas como contexto para outras conversas. Para corrigir uma memória, informe a atualização no chat. Iniciar uma nova conversa mantém as memórias salvas.</p>
+                    <p class="assistant-memory-example">Exemplo: “O time do Alestan é formado por Ana e Bruno.”</p>
+                    <p class="assistant-thinking" x-show="assistantMemoriesLoading" role="status">Consultando memórias…</p>
+                    <div class="assistant-error" x-show="assistantMemoriesError" role="alert"><p x-text="assistantMemoriesError"></p><button type="button" @click="loadAssistantMemories()" :disabled="assistantMemoriesLoading">Tentar novamente</button></div>
+                    <p class="assistant-memory-status" x-show="assistantMemoriesStatus" x-text="assistantMemoriesStatus" role="status"></p>
+                    <p class="assistant-memory-empty" x-show="!assistantMemoriesLoading && !assistantMemoriesError && !assistantMemories.length">Nenhuma memória salva ainda. Compartilhe uma informação no chat para que o Assistente possa lembrá-la.</p>
+                    <ul class="assistant-memory-list" x-show="!assistantMemoriesLoading && !assistantMemoriesError">
+                        <template x-for="memory in assistantMemories" :key="memory.id">
+                            <li class="assistant-memory-card"><h4 x-text="memory.subject"></h4><p x-text="memory.content"></p><div class="assistant-memory-footer"><span x-text="memory.updated_at ? 'Atualizada em ' + assistantSourceDate(memory.updated_at) : 'Informada por você'"></span><button type="button" class="assistant-memory-forget" @click="forgetAssistantMemory(memory)" :disabled="!!assistantMemoryDeleteId || assistantBusy" :aria-label="'Esquecer memória: ' + memory.subject" x-text="assistantMemoryDeleteId === memory.id ? 'Removendo…' : 'Esquecer'"></button></div></li>
+                        </template>
+                    </ul>
+                </div>
+            </section>
+
+            <div class="assistant-feed" x-show="!assistantMemoriesOpen" x-ref="assistantFeed" role="log" aria-label="Conversa com Cortex IA" :aria-busy="assistantBusy" :inert="!!assistantSelectedSource">
+                <p class="assistant-memory-intro" x-show="!assistantMessages.length">Compartilhe informações sobre o time para usar como contexto em conversas futuras. As confirmações aparecem aqui e você pode revisá-las em <button type="button" @click="toggleAssistantMemories()">Memórias</button>.</p>
                 <template x-for="message in assistantMessages" :key="message.id">
                     <article class="assistant-message" :class="'assistant-message-' + message.role">
                         <span class="assistant-message-label" x-text="message.role === 'user' ? 'Você' : 'Cortex IA'"></span>
@@ -1223,6 +1242,7 @@
                                     <div class="assistant-source-list"><template x-for="(source, sourceIndex) in message.sources" :key="sourceIndex"><button type="button" class="assistant-source-chip" @click="showAssistantSource(source, $event.currentTarget)" :title="source.title"><b x-text="source.id"></b><span x-text="source.title || assistantSourceName(source.type)"></span></button></template></div>
                                 </details>
                                 <p class="assistant-coverage" x-show="assistantCoverage(message.coverage)" x-text="'Contexto consultado: ' + assistantCoverage(message.coverage)"></p>
+                                <template x-for="(change, changeIndex) in message.memoryChanges" :key="changeIndex"><p class="assistant-memory-confirmation" role="status"><span aria-hidden="true">✓</span><span x-text="(change.status === 'updated' ? 'Memória atualizada: ' : 'Memória salva: ') + change.subject"></span><button type="button" @click="toggleAssistantMemories()">Revisar</button></p></template>
                                 <template x-for="(warning, warningIndex) in message.warnings" :key="warningIndex"><p class="assistant-warning" x-text="warning"></p></template>
                                 <template x-for="(action, actionIndex) in message.actions" :key="actionIndex">
                                     <div class="assistant-action">
@@ -1242,7 +1262,7 @@
                 <div class="assistant-error" x-show="assistantError" role="alert"><p x-text="assistantError"></p><button type="button" @click="retryAssistant()" :disabled="assistantBusy || !!assistantActionBusy" x-show="assistantLastRequest">Tentar novamente</button></div>
             </div>
 
-            <form class="assistant-composer" @submit.prevent="sendAssistant()" :inert="!!assistantSelectedSource">
+            <form class="assistant-composer" x-show="!assistantMemoriesOpen" @submit.prevent="sendAssistant()" :inert="!!assistantSelectedSource">
                 <div class="assistant-input-wrap"><textarea id="assistant-input" class="assistant-input" x-ref="assistantInput" x-model="assistantDraft" rows="2" maxlength="6000" aria-label="Sua pergunta ou pedido ao Cortex IA" placeholder="Pergunte sobre o time ou peça uma ação…" @keydown.enter="if (!$event.shiftKey && !$event.isComposing) { $event.preventDefault(); sendAssistant(); }"></textarea><button type="submit" class="assistant-send" :disabled="!assistantDraft.trim() || assistantBusy || !!assistantActionBusy" aria-label="Enviar pergunta"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
                 <div class="assistant-composer-note"><span>Confira as fontes. A IA pode cometer erros.</span><span>Shift + Enter: nova linha</span></div>
             </form>

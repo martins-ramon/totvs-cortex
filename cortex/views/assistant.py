@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from ..ai.assistant_service import generate_assistant_reply, validate_reply
 from ..assistant_context import gather_context
+from ..assistant_memory import delete_memory, load_memories, save_memories
 from ..database import session_factory
 from ..security import login_required
 
@@ -131,8 +132,48 @@ def chat():
         except Exception as exc:
             log.warning("Proposta de ação indisponível (%s).", type(exc).__name__)
             warnings.append("Não foi possível preparar a alteração. Os dados continuam sem alterações.")
-    reply.update(actions=actions, coverage=context.get("coverage", {}), warnings=warnings)
+    memory_changes = []
+    proposals = reply.pop("memory_proposals")
+    if proposals:
+        try:
+            if context.get("coverage", {}).get("memory", {}).get("status") == "unavailable":
+                raise ValueError("Memórias indisponíveis.")
+            memory_changes = save_memories(session["user_id"], proposals, message, history, context)
+        except Exception as exc:
+            log.warning("Falha ao salvar memória do assistente (%s).", type(exc).__name__)
+            warnings.append("A informação não foi salva na memória. Tente informá-la novamente.")
+    reply.update(actions=actions, memory_changes=memory_changes,
+                 coverage=context.get("coverage", {}), warnings=warnings)
     return jsonify(reply)
+
+
+@bp.route("/memories", methods=["GET"])
+@login_required
+def memories():
+    try:
+        rows = load_memories(session["user_id"])
+        return jsonify(memories=[{key: str(row[key]) if key == "updated_at" else row[key]
+                                  for key in ("id", "subject", "content", "updated_at")}
+                                 for row in rows])
+    except Exception as exc:
+        log.warning("Memórias indisponíveis (%s).", type(exc).__name__)
+        return jsonify(error="Não foi possível consultar as memórias. Tente novamente."), 503
+
+
+@bp.route("/memories/<int:memory_id>", methods=["DELETE"])
+@login_required
+def forget_memory(memory_id):
+    try:
+        _body()
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    try:
+        if not delete_memory(session["user_id"], memory_id):
+            return jsonify(error="Memória não encontrada."), 404
+        return jsonify(message="Memória removida.")
+    except Exception as exc:
+        log.warning("Falha ao remover memória (%s).", type(exc).__name__)
+        return jsonify(error="Não foi possível remover a memória. Tente novamente."), 503
 
 
 @bp.route("/actions", methods=["POST"])

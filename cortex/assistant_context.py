@@ -14,6 +14,7 @@ from collections import Counter, defaultdict
 from sqlalchemy import text
 
 from cortex.assistant_gmail import search_gmail
+from cortex.assistant_memory import load_memories
 from cortex.database import session_factory
 from cortex.meeting_insights import analysis_stale
 from cortex.transcripts import normalize_transcript
@@ -23,7 +24,7 @@ _SOURCE_BUDGET = 3_600
 _CHUNK_SIZE = 1_400
 _CHUNK_OVERLAP = 180
 _MAX_SOURCES = 70
-_SOURCE_ID = re.compile(r"(?<![A-Za-z0-9_])(?:(?:person|one_on_one|commitment|checkpoint|meeting|meeting_action):[1-9][0-9]{0,9}|email:[A-Za-z0-9_-]{1,200})(?![A-Za-z0-9_:-])")
+_SOURCE_ID = re.compile(r"(?<![A-Za-z0-9_])(?:(?:person|one_on_one|commitment|checkpoint|meeting|meeting_action|memory):[1-9][0-9]{0,9}|email:[A-Za-z0-9_-]{1,200})(?![A-Za-z0-9_:-])")
 _FOLLOWUP_REFERENCES = set("""
 esse essa esses essas isso isto aquele aquela aqueles aquelas deles delas dele dela
 tabela lista grafico organograma linha linhas item itens primeiro primeira segundo
@@ -41,6 +42,9 @@ passo passos proximos proximas favor combinado combinados compromisso compromiss
 _FOLLOWUP_ACTIONS = {"conclua", "concluir", "marque", "marcar", "cancele", "cancelar",
                      "crie", "criar", "adicione", "adicionar", "atualize", "atualizar",
                      "salve", "salvar", "registre", "registrar", "finalize", "finalizar"}
+_MEMORY_CORRECTION = re.compile(
+    r"\b(?:na verdade|atualizando|corrigindo|correcao|corrija|substitua|troque|atualize|"
+    r"inclua|adicione|acrescente|retire|remova|agora (?:sao|e))\b")
 _STOPWORDS = set("""
 a ao aos aquela aquele aquelas aqueles aqui as ate atraves cada com como contra
 da das de dela dele deles demais dentro depois dessa desse desta deste do dos e
@@ -373,6 +377,19 @@ def _chunks(value):
             for start in range(0, len(value), _CHUNK_SIZE - _CHUNK_OVERLAP)]
 
 
+def _memory_record(row):
+    """User statements remain distinguishable from meeting evidence."""
+    lines = ["Informação fornecida pelo diretor no Assistente (não verificada em outras fontes).",
+             f"Assunto: {row['subject']}", f"Informação: {row['content']}",
+             f"Trecho informado pelo diretor: {row['evidence']}"]
+    if row.get("conversation_context"):
+        lines.append(f"Pergunta/mensagem anterior do diretor, para resolver referências: {row['conversation_context']}")
+    return {"id": f"memory:{row['id']}", "type": "memory",
+            "title": f"Memória · {row['subject']}", "excerpt": "\n".join(lines),
+            "date": _iso(row["updated_at"]), "person_id": None,
+            "record_id": row["id"], "memory_version": row["version"]}
+
+
 def _score(value, terms, weights):
     normalized = _fold(value)
     return sum(weights.get(term, 1.0) for term in terms if _contains(term, normalized))
@@ -414,7 +431,7 @@ def _select(records, terms, matched_ids, budget=_CONTEXT_BUDGET, source_hints=No
         if terms and score == 0 and not person_match and not hinted:
             continue
         item = dict(record)
-        item["_score"] = score + (4 if person_match else 0) + (100 if hinted else 0)
+        item["_score"] = score + (4 if person_match else 0) + (8 if record["type"] == "memory" else 0) + (100 if hinted else 0)
         item["excerpt"], item["excerpt_partial"] = _excerpt(item["excerpt"], terms, weights)
         candidates.append(item)
 
@@ -449,10 +466,25 @@ def gather_context(user_id, message, history=None):
     """Collect evidence for an authenticated director, safely degrading Gmail."""
     warnings = []
     people, records = _load_database()
+    try:
+        memories = [_memory_record(row) for row in load_memories(user_id)]
+        memory_coverage = {"status": "available", "count": len(memories)}
+    except Exception:
+        memories = []
+        memory_coverage = {"status": "unavailable", "count": 0}
+        warnings.append("As memórias estão indisponíveis nesta consulta; não foi possível recuperá-las ou atualizá-las.")
     matched_ids, ambiguous_ids = _match_people(message, history, people)
     if ambiguous_ids:
         warnings.append("O nome citado corresponde a mais de uma pessoa. Confirme o nome completo antes de executar pedidos sobre uma pessoa específica.")
     terms = _terms(message)
+    # A correction often introduces new names and uses a pronoun for its subject.
+    # User-authored topic terms retrieve the existing memory so it can be replaced,
+    # instead of leaving two contradictory versions for future conversations.
+    correction = bool(_MEMORY_CORRECTION.search(_fold(message)))
+    if history and (correction or re.search(r"\b(dele|dela|deles|delas|nesse|nessa)\b", _fold(message))):
+        previous = next((turn.get("content", "") for turn in reversed(history[-8:])
+                         if isinstance(turn, dict) and turn.get("role") == "user"), "")
+        terms = list(dict.fromkeys(terms + _terms(previous)))
     if not terms and matched_ids and history:
         for entry in reversed(history[-4:]):
             if isinstance(entry, dict) and entry.get("role") == "user":
@@ -466,9 +498,19 @@ def gather_context(user_id, message, history=None):
         mail = {"sources": [], "coverage": {"status": "unavailable", "partial": True},
                 "warnings": ["Gmail indisponível nesta consulta; os registros do Cortex continuam disponíveis."]}
     warnings.extend(mail["warnings"])
-    all_records = records + mail["sources"]
+    all_records = records + memories + mail["sources"]
     explicit_ids, _ = _match_people(message, None, people)
     source_hints = _conversation_hints(message, history, all_records, explicit_ids)
+    if correction:
+        # Changed facts introduce new terms absent from the previous answer.
+        # Only existing owned memory IDs may bridge that gap; deleted memories
+        # and arbitrary IDs in the client history never become evidence.
+        last_answer = next((turn.get("content", "") for turn in reversed((history or [])[-8:])
+                            if isinstance(turn, dict) and turn.get("role") == "assistant"), "")
+        known_memories = {record["id"] for record in memories}
+        source_hints = list(dict.fromkeys(source_hints + [
+            match.group() for match in _SOURCE_ID.finditer(last_answer)
+            if match.group() in known_memories]))
     # Reserve space for the person directory as well as evidence. Notes remain
     # searchable in full through person sources; metadata is only a brief view.
     metadata_base = [{**person, "notes": ""} for person in people]
@@ -480,6 +522,7 @@ def gather_context(user_id, message, history=None):
                                          budget=max(0, _CONTEXT_BUDGET - metadata_chars),
                                          source_hints=source_hints)
     selected_email = [item for item in selected if item["type"] == "email"]
+    memory_coverage["selected_count"] = sum(item["type"] == "memory" for item in selected)
     mail["coverage"]["selected_message_count"] = len(selected_email)
     mail["coverage"]["context_partial"] = (len(selected_email) < len(mail["sources"])
                                              or any(item["excerpt_partial"] for item in selected_email))
@@ -503,13 +546,14 @@ def gather_context(user_id, message, history=None):
     return {"sources": selected, "people": people_metadata,
             "coverage": {
                 "database": {"status": "available", "scanned_by_type": counts(records),
-                             "matching_by_type": counts(item for item in candidates if item["type"] != "email"),
-                             "selected_by_type": counts(item for item in selected if item["type"] != "email"),
+                             "matching_by_type": counts(item for item in candidates if item["type"] not in {"email", "memory"}),
+                             "selected_by_type": counts(item for item in selected if item["type"] not in {"email", "memory"}),
                              "date_range": {"from": dates[0] if dates else None, "to": dates[-1] if dates else None},
                              "date_filter": None, "partial": partial,
                              "person_notes_summarized": truncated_notes,
                              "context_chars": chars, "context_char_budget": _CONTEXT_BUDGET},
-                "gmail": mail["coverage"], "matched_person_ids": sorted(matched_ids),
+                "gmail": mail["coverage"], "memory": memory_coverage,
+                "matched_person_ids": sorted(matched_ids),
                 "ambiguous_person_ids": sorted(ambiguous_ids),
                 "conversation_source_hints": source_hints},
             "warnings": warnings}

@@ -9,7 +9,7 @@ import requests
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from cortex import assistant_context as context, assistant_gmail
+from cortex import assistant_context as context, assistant_gmail, assistant_memory
 from cortex.meeting_insights import source_fingerprint
 
 
@@ -24,6 +24,11 @@ class AssistantContextTests(unittest.TestCase):
         self.engine = create_engine("sqlite://")
         self.sessions = sessionmaker(bind=self.engine)
         ddl = [
+            """CREATE TABLE assistant_memories (id INTEGER PRIMARY KEY, user_id INTEGER,
+               subject TEXT, subject_key TEXT, content TEXT, evidence TEXT, source_message TEXT,
+               conversation_context TEXT, version INTEGER DEFAULT 1,
+               created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+               UNIQUE(user_id, subject_key))""",
             """CREATE TABLE people (id INTEGER PRIMARY KEY, full_name TEXT, preferred_name TEXT,
                email TEXT, role_title TEXT, notes TEXT, active BOOLEAN, transcript_aliases TEXT)""",
             """CREATE TABLE one_on_ones (id INTEGER PRIMARY KEY, person_id INTEGER, occurred_on TEXT,
@@ -48,6 +53,7 @@ class AssistantContextTests(unittest.TestCase):
                 db.execute(text(statement))
         self.addCleanup(self.engine.dispose)
         self.factory = patch.object(context, "session_factory", side_effect=self.sessions).start()
+        patch.object(assistant_memory, "session_factory", side_effect=self.sessions).start()
         self.addCleanup(patch.stopall)
         self.mail = patch.object(context, "search_gmail", return_value={
             "sources": [], "coverage": {"status": "not_connected", "partial": False}, "warnings": [],
@@ -77,6 +83,59 @@ class AssistantContextTests(unittest.TestCase):
         for person_id in participant_ids:
             self.insert("meeting_participants", {"meeting_id": record_id, "person_id": person_id})
         return values
+
+    def test_saved_memory_is_a_citable_source_in_a_new_conversation(self):
+        self.insert("assistant_memories", {
+            "id": 9, "user_id": 7, "subject": "Equipe do Alestan", "subject_key": "alestan",
+            "content": "O time do Alestan é formado por Beatriz e Caio.",
+            "evidence": "O time dele é Beatriz e Caio.",
+            "source_message": "O time dele é Beatriz e Caio.",
+            "conversation_context": "Quem integra o time do Alestan?", "version": 2,
+        })
+        result = context.gather_context(7, "Quem faz parte do time do Alestan?")
+        source = next(s for s in result["sources"] if s["id"] == "memory:9")
+        self.assertIn("Beatriz e Caio", source["excerpt"])
+        self.assertIn("não verificada", source["excerpt"])
+        self.assertEqual(source["type"], "memory")
+        self.assertEqual(source["memory_version"], 2)
+        self.assertEqual(result["coverage"]["memory"]["selected_count"], 1)
+        self.assertNotIn("memory", result["coverage"]["database"]["selected_by_type"])
+        other = context.gather_context(8, "Quem integra o time do Alestan?")
+        self.assertNotIn("memory:9", {s["id"] for s in other["sources"]})
+
+    def test_pronominal_correction_retrieves_original_memory_with_new_names(self):
+        self.insert("assistant_memories", {
+            "id": 9, "user_id": 7, "subject": "Equipe do Alestan", "subject_key": "alestan",
+            "content": "O time do Alestan é Beatriz.", "evidence": "O time é Beatriz.",
+            "source_message": "O time é Beatriz.", "conversation_context": "", "version": 1,
+        })
+        result = context.gather_context(7, "Na verdade o time dele agora é Caio.", [
+            {"role": "user", "content": "Quem está no time do Alestan?"},
+            {"role": "assistant", "content": "Beatriz. [memory:9]"},
+        ])
+        self.assertIn("memory:9", {s["id"] for s in result["sources"]})
+
+    def test_missing_memory_schema_degrades_only_memory_retrieval(self):
+        self.meeting(1, 1, "2026-10-20", "O projeto Alestan está em evolução.")
+        with patch.object(context, "load_memories", side_effect=RuntimeError("private SQL")):
+            result = context.gather_context(7, "Como está o Alestan?")
+        self.assertEqual(result["coverage"]["memory"]["status"], "unavailable")
+        self.assertIn("one_on_one:1", {s["id"] for s in result["sources"]})
+        self.assertNotIn("private SQL", json.dumps(result))
+
+    def test_correction_with_entirely_new_names_reloads_memory_by_topic_and_source(self):
+        self.insert("assistant_memories", {
+            "id": 9, "user_id": 7, "subject": "Equipe do Alestan", "subject_key": "alestan",
+            "content": "O time do Alestan é Beatriz.", "evidence": "O time é Beatriz.",
+            "source_message": "O time é Beatriz.", "conversation_context": "", "version": 1,
+        })
+        for message in ("Na verdade, agora são Carla e Diego.", "Inclua Carla e Diego também."):
+            for response in ("Beatriz. [memory:9]", "O time tem Beatriz."):
+                result = context.gather_context(7, message, [
+                    {"role": "user", "content": "Quem faz parte do time do Alestan?"},
+                    {"role": "assistant", "content": response},
+                ])
+                self.assertIn("memory:9", {s["id"] for s in result["sources"]})
 
     def test_group_history_uses_declared_participant_alias_without_duplicating_meeting(self):
         transcript = "Tema de rotina. " * 5000 + "LYNN Studio precisa ampliar autonomia."

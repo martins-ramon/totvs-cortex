@@ -268,6 +268,23 @@ _NEW_DDL = [
         UNIQUE(user_id, tool)
     )
     """, "connections"),
+    ("""
+    CREATE TABLE IF NOT EXISTS assistant_memories (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        subject VARCHAR(160) NOT NULL,
+        subject_key VARCHAR(64) NOT NULL,
+        content TEXT NOT NULL CHECK (char_length(content) BETWEEN 1 AND 2400),
+        evidence TEXT NOT NULL CHECK (char_length(evidence) BETWEEN 1 AND 2400),
+        source_message TEXT NOT NULL CHECK (char_length(source_message) BETWEEN 1 AND 6000),
+        conversation_context TEXT NOT NULL DEFAULT '' CHECK (char_length(conversation_context) <= 6000),
+        version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (user_id, subject_key)
+    )
+    """, "assistant_memories"),
+    ("CREATE INDEX IF NOT EXISTS idx_assistant_memories_user ON assistant_memories (user_id, updated_at DESC)", "idx_assistant_memories_user"),
 ]
 
 # Evoluções incrementais (colunas adicionadas após a primeira versão das tabelas)
@@ -296,10 +313,11 @@ def check_database():
                 SELECT users.id, people.id, people.transcript_aliases, one_on_ones.extraction_json,
                        commitments.id, commitments.assistant_request_id, checkpoints.id, card_jobs.progress_json,
                        member_cards.id, connections.id, meetings.extraction_json,
-                       meeting_participants.person_id, meeting_actions.source_key
+                       meeting_participants.person_id, meeting_actions.source_key,
+                       assistant_memories.subject_key, assistant_memories.version
                 FROM users, people, one_on_ones, commitments, checkpoints,
                      card_jobs, member_cards, connections, meetings,
-                     meeting_participants, meeting_actions
+                     meeting_participants, meeting_actions, assistant_memories
                 WHERE FALSE
             """))
         return "ok"

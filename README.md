@@ -75,7 +75,9 @@ O assistente pesquisa também as transcrições, notas, decisões e ações dess
 
 ### Assistente flutuante Cortex IA
 
-O botão **Cortex IA**, no canto inferior direito, abre uma conversa disponível em todas as seções. Pergunte sobre desafios do time, pontos de atenção, combinados, estrutura organizacional ou planos estratégicos e táticos. O assistente consulta perfis, transcrições completas de 1:1s e fóruns, resumos, notas, decisões, ações, checkpoints, combinados e o Gmail conectado do diretor. A conversa fica somente na memória da página; **Nova conversa** limpa o histórico.
+O botão **Cortex IA**, no canto inferior direito, abre uma conversa disponível em todas as seções. Pergunte sobre desafios do time, pontos de atenção, combinados, estrutura organizacional ou planos estratégicos e táticos. O assistente consulta perfis, transcrições completas de 1:1s e fóruns, resumos, notas, decisões, ações, checkpoints, combinados, memórias e o Gmail conectado do diretor. **Nova conversa** limpa o histórico da página e preserva as memórias salvas no banco.
+
+Ao informar um fato duradouro na conversa, como **“O time do Alestan é formado por Ana e Bruno”**, o assistente pode registrá-lo automaticamente. Também entende complementos como **“O time dele é Ana e Bruno”** após uma pergunta sobre Alestan. A interface confirma quando a memória foi salva ou atualizada. Em conversas futuras, a informação aparece como fonte **Memória**, identificada como declaração do diretor, com data e trecho original; ela não altera cadastros nem cria vínculos entre pessoas. Perguntas, hipóteses e respostas da própria IA não são memorizadas. Informe correções na conversa ou abra **Memórias → Esquecer** para remover um fato. As memórias são privadas do usuário autenticado.
 
 As buscas percorrem todas as datas do banco e selecionam trechos por relevância, incluindo passagens no interior de transcrições longas. A resposta apresenta fontes consultáveis e informa cortes de contexto. Gmail é consultado por pessoa ou assunto, sem corte temporal fixo, com até 8 conversas, 48 mensagens e orçamento de 16 segundos por pergunta. Limites, falhas e conexão ausente são indicados na conversa; uma seleção parcial não equivale a uma auditoria completa da caixa ou do histórico.
 
@@ -83,7 +85,7 @@ Além do texto, a IA pode retornar **organogramas, tabelas e gráficos de barras
 
 Pedidos explícitos podem preparar a **criação ou conclusão de um combinado**. Revise a pessoa, descrição, responsável e prazo e use **Confirmar e executar** para salvar. A proposta expira em 15 minutos; repetições da mesma ação não duplicam combinados. O Gmail permanece somente leitura: o assistente pode redigir um e-mail no chat, mas não enviá-lo.
 
-**Atualização de instalações existentes:** execute `uv run --env-file .env python -m cortex.init_db` antes de servir esta versão. O comando adiciona `commitments.assistant_request_id` e seu índice único para impedir duplicações em tentativas repetidas. Não é necessária uma nova variável de ambiente ou extensão no Postgres.
+**Atualização de instalações existentes:** execute `uv run --env-file .env python -m cortex.init_db` antes de servir esta versão. Além de `commitments.assistant_request_id` e seu índice único, o comando cria `assistant_memories` e seu índice por usuário/assunto. Não é necessária uma nova variável de ambiente ou extensão no Postgres. Se a tabela de memórias estiver indisponível, o chat continua consultando as demais fontes e informa que a memória não pôde ser recuperada ou salva; `/healthz` sinaliza o schema incompleto.
 
 ### Correção de nomes nas transcrições
 

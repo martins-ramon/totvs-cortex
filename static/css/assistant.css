@@ -16,6 +16,22 @@
 .assistant-header-actions { display: flex; gap: 3px; }
 .assistant-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: #64748b; }
 .assistant-icon-button:hover { background: #e9ecf6; color: #4338ca; }
+.assistant-memories-button { padding: 5px 7px; border: 1px solid #dddff2; border-radius: 8px; background: #fff; color: #4f46e5; font-size: 11px !important; }
+.assistant-memories-button:hover, .assistant-memories-button[aria-expanded="true"] { background: #eeefff; border-color: #a5a3f5; }
+.assistant-memories-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; background: #fafbff; }
+.assistant-memories-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 17px 18px; }
+.assistant-memory-help, .assistant-memory-example, .assistant-memory-empty, .assistant-memory-intro { margin: 0 0 13px; color: #64748b; font-size: 12px; line-height: 1.7; }
+.assistant-memory-example { color: #4338ca; background: #eef0ff; border-radius: 9px; padding: 9px 11px; }
+.assistant-memory-intro button, .assistant-memory-confirmation button { border: 0; padding: 0; background: transparent; color: #4f46e5; text-decoration: underline; font-size: inherit; }
+.assistant-memory-list { list-style: none; padding: 0; margin: 16px 0 0; display: flex; flex-direction: column; gap: 12px; }
+.assistant-memory-card { padding: 13px; border: 1px solid #e0e5ef; border-radius: 11px; background: #fff; overflow-wrap: anywhere; }
+.assistant-memory-card h4 { margin: 0 0 6px; font-size: 12px; color: #3730a3; }
+.assistant-memory-card p { margin: 0; white-space: pre-wrap; color: #475569; font-size: 12px; line-height: 1.7; }
+.assistant-memory-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 10px; color: #64748b; }
+.assistant-memory-forget { border: 1px solid #e0e5ef; border-radius: 7px; padding: 5px 8px; background: #fff; color: #9f1239; font-size: 11px !important; }
+.assistant-memory-forget:hover { background: #fff1f2; border-color: #fecdd3; }
+.assistant-memory-confirmation { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; color: #166534; background: #f0fdf4; font-size: 11px; }
+.assistant-memory-status { color: #166534; font-size: 12px; margin-top: 12px; }
 .assistant-feed { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 22px 18px; scroll-behavior: smooth; }
 .assistant-suggestions { display: flex; flex-direction: column; gap: 8px; }
 .assistant-suggestion { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px; text-align: left; border: 1px solid #e4e7f0; border-radius: 12px; background: #fff; color: #475569; font-size: 12px !important; line-height: 1.5; }
