@@ -92,15 +92,21 @@
         <main class="main-content">
 
             <!-- ===== DASHBOARD ===== -->
-            <section x-show="view==='dashboard'">
+            <section class="home-dashboard" x-show="view==='dashboard'">
                 <div class="view-header">
                     <h2>Bom te ver, <span x-text="firstName"></span> 👋</h2>
                     <p>Sua visão geral do time, das conversas e dos planos da área.</p>
                 </div>
 
+                <div class="dashboard-error" role="status" x-show="dashError || dashCardsError">
+                    <span x-text="[dashError, dashCardsError].filter(Boolean).join(' ')"></span>
+                    <button type="button" class="btn-link" @click="loadDashboard()">Tentar novamente</button>
+                </div>
+
                 <!-- KPIs -->
                 <div class="stat-grid">
-                    <div class="stat-card" :class="'stat-health-' + teamHealth.tone">
+                    <div class="stat-card dashboard-async" :class="{['stat-health-' + teamHealth.tone]: true, 'is-loading': dashCardsLoading}" :aria-busy="dashCardsLoading" aria-label="Saúde do time">
+                        <span class="dashboard-placeholder" aria-hidden="true"></span>
                         <template x-if="teamHealth.total > 0">
                             <div class="stat-number health-dots">
                                 <span class="hd hd-g" title="Saudável" x-text="teamHealth.verde"></span>
@@ -111,21 +117,25 @@
                         <template x-if="teamHealth.total === 0">
                             <div class="stat-number">—</div>
                         </template>
-                        <div class="stat-label" x-text="teamHealth.total > 0 ? 'Saúde do time (cards IA)' : 'Saúde do time — gere os Cards do Time'"></div>
+                        <div class="stat-label" x-text="dashCardsError ? 'Saúde do time indisponível' : (teamHealth.total > 0 ? 'Saúde do time (cards IA)' : 'Saúde do time — gere os Cards do Time')"></div>
                     </div>
-                    <div class="stat-card" :class="{'stat-alert': k.coverage_month != null && k.coverage_month < 100}">
+                    <div class="stat-card dashboard-async" :class="{'stat-alert': k.coverage_month != null && k.coverage_month < 100, 'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Cadência mensal">
+                        <span class="dashboard-placeholder" aria-hidden="true"></span>
                         <div class="stat-number" x-text="k.coverage_month != null ? k.coverage_month + '%' : '—'"></div>
                         <div class="stat-label">Cadência: time com 1:1 neste mês</div>
                     </div>
-                    <div class="stat-card" :class="{'stat-alert': k.overdue_commitments > 0}">
+                    <div class="stat-card dashboard-async" :class="{'stat-alert': k.overdue_commitments > 0, 'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Combinados vencidos">
+                        <span class="dashboard-placeholder" aria-hidden="true"></span>
                         <div class="stat-number" x-text="k.overdue_commitments ?? '—'"></div>
                         <div class="stat-label">Combinados vencidos</div>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card dashboard-async" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Conclusão de combinados">
+                        <span class="dashboard-placeholder" aria-hidden="true"></span>
                         <div class="stat-number" x-text="k.completion_rate_30d != null ? k.completion_rate_30d + '%' : '—'"></div>
                         <div class="stat-label">Conclusão de combinados (30d)</div>
                     </div>
-                    <div class="stat-card">
+                    <div class="stat-card dashboard-async" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="1:1s recentes">
+                        <span class="dashboard-placeholder" aria-hidden="true"></span>
                         <div class="stat-number" x-text="k.sessions_30d ?? '—'"></div>
                         <div class="stat-label">1:1s nos últimos 30 dias</div>
                     </div>
@@ -139,53 +149,59 @@
 
                 <!-- Radar do time -->
                 <h3 class="section-title">Radar do time</h3>
-                <template x-if="!dash || dash.people_pulse.length === 0">
-                    <div class="empty-state">
-                        <p>Nenhuma pessoa ativa no time ainda.</p>
-                        <p class="form-hint">Cadastre seu time em "Meu Time" e registre a primeira conversa 1:1.</p>
-                    </div>
-                </template>
-                <div class="meetings-table pulse-table" x-show="dash && dash.people_pulse.length > 0">
-                    <table>
-                        <thead><tr><th>Pessoa</th><th>Saúde</th><th>Último 1:1</th><th>Sentimento</th><th>Combinados</th><th>Ritmo (90d)</th></tr></thead>
-                        <tbody>
-                            <template x-for="p in pulseSorted" :key="p.person_id">
-                                <tr class="pulse-row" @click="openPersonById(p.person_id)">
-                                    <td>
-                                        <div class="pulse-person">
-                                            <div class="avatar-sm avatar-color" :class="colorClass(p.name)" x-text="initials(p.name)"></div>
-                                            <div>
-                                                <strong x-text="p.preferred_name || p.name"></strong>
-                                                <small x-text="p.role_title || ''"></small>
+                <div class="dashboard-async dashboard-radar" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Radar do time">
+                    <span class="dashboard-placeholder" aria-hidden="true"></span>
+                    <template x-if="!dashLoading && dash && dash.people_pulse.length === 0">
+                        <div class="empty-state">
+                            <p>Nenhuma pessoa ativa no time ainda.</p>
+                            <p class="form-hint">Cadastre seu time em "Meu Time" e registre a primeira conversa 1:1.</p>
+                        </div>
+                    </template>
+                    <div class="meetings-table pulse-table" x-show="dash && dash.people_pulse.length > 0">
+                        <table>
+                            <thead><tr><th>Pessoa</th><th>Saúde</th><th>Último 1:1</th><th>Sentimento</th><th>Combinados</th><th>Ritmo (90d)</th></tr></thead>
+                            <tbody>
+                                <template x-for="p in pulseSorted" :key="p.person_id">
+                                    <tr class="pulse-row" @click="openPersonById(p.person_id)">
+                                        <td>
+                                            <div class="pulse-person">
+                                                <div class="avatar-sm avatar-color" :class="colorClass(p.name)" x-text="initials(p.name)"></div>
+                                                <div>
+                                                    <strong x-text="p.preferred_name || p.name"></strong>
+                                                    <small x-text="p.role_title || ''"></small>
+                                                </div>
                                             </div>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <template x-if="cardOf(p.person_id)">
-                                            <span>
-                                                <span class="health-chip" :class="'hc-' + (cardOf(p.person_id).card_json.ai?.saude || 'amarelo')" x-text="cardOf(p.person_id).card_json.ai?.saude || 'amarelo'"></span>
-                                                <span :title="trendInfo(cardOf(p.person_id)).label" x-text="trendInfo(cardOf(p.person_id)).emoji"></span>
+                                        </td>
+                                        <td>
+                                            <span class="dashboard-async dashboard-inline" :class="{'is-loading': dashCardsLoading}" :aria-busy="dashCardsLoading" aria-label="Saúde individual">
+                                                <span class="dashboard-placeholder" aria-hidden="true"></span>
+                                                <template x-if="cardOf(p.person_id)">
+                                                    <span>
+                                                        <span class="health-chip" :class="'hc-' + (cardOf(p.person_id).card_json.ai?.saude || 'amarelo')" x-text="cardOf(p.person_id).card_json.ai?.saude || 'amarelo'"></span>
+                                                        <span :title="trendInfo(cardOf(p.person_id)).label" x-text="trendInfo(cardOf(p.person_id)).emoji"></span>
+                                                    </span>
+                                                </template>
+                                                <template x-if="!cardOf(p.person_id)"><span class="chip chip-muted" x-text="dashCardsError ? 'indisponível' : 'sem card'"></span></template>
                                             </span>
-                                        </template>
-                                        <template x-if="!cardOf(p.person_id)"><span class="chip chip-muted">sem card</span></template>
-                                    </td>
-                                    <td>
-                                        <span :class="{'text-warn': !p.has_session_this_month}"
-                                              :title="p.has_session_this_month ? 'Meta mensal cumprida' : '1:1 pendente neste mês'"
-                                              x-text="p.days_since_last === null ? 'nunca' : ('há ' + p.days_since_last + ' dia' + (p.days_since_last === 1 ? '' : 's'))"></span>
-                                    </td>
-                                    <td>
-                                        <span class="chip" :class="p.last_sentiment ? 'sent-' + p.last_sentiment : 'chip-muted'" x-text="p.last_sentiment || '—'"></span>
-                                    </td>
-                                    <td>
-                                        <span x-text="p.open_commitments + ' aberto' + (p.open_commitments === 1 ? '' : 's')"></span>
-                                        <span class="badge-overdue" x-show="p.overdue_commitments > 0" x-text="p.overdue_commitments + ' vencido' + (p.overdue_commitments === 1 ? '' : 's')"></span>
-                                    </td>
-                                    <td><span x-text="p.sessions_90d + ' 1:1s'"></span><small class="meeting-pulse-context" x-show="p.group_meetings_90d || p.open_meeting_actions" x-text="(p.group_meetings_90d || 0) + ' reuniões de fóruns · ' + (p.open_meeting_actions || 0) + ' ações em aberto'"></small></td>
-                                </tr>
-                            </template>
-                        </tbody>
-                    </table>
+                                        </td>
+                                        <td>
+                                            <span :class="{'text-warn': !p.has_session_this_month}"
+                                                  :title="p.has_session_this_month ? 'Meta mensal cumprida' : '1:1 pendente neste mês'"
+                                                  x-text="p.days_since_last === null ? 'nunca' : ('há ' + p.days_since_last + ' dia' + (p.days_since_last === 1 ? '' : 's'))"></span>
+                                        </td>
+                                        <td>
+                                            <span class="chip" :class="p.last_sentiment ? 'sent-' + p.last_sentiment : 'chip-muted'" x-text="p.last_sentiment || '—'"></span>
+                                        </td>
+                                        <td>
+                                            <span x-text="p.open_commitments + ' aberto' + (p.open_commitments === 1 ? '' : 's')"></span>
+                                            <span class="badge-overdue" x-show="p.overdue_commitments > 0" x-text="p.overdue_commitments + ' vencido' + (p.overdue_commitments === 1 ? '' : 's')"></span>
+                                        </td>
+                                        <td><span x-text="p.sessions_90d + ' 1:1s'"></span><small class="meeting-pulse-context" x-show="p.group_meetings_90d || p.open_meeting_actions" x-text="(p.group_meetings_90d || 0) + ' reuniões de fóruns · ' + (p.open_meeting_actions || 0) + ' ações em aberto'"></small></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <!-- Tendências -->
@@ -194,25 +210,26 @@
                     <div class="panel chart-panel">
                         <h4>Clima das 1:1s</h4>
                         <p class="chart-hint">Sentimento das conversas por semana, nas últimas 12 semanas.</p>
-                        <div class="chart-box"><canvas id="chartSentiment"></canvas></div>
+                        <div class="chart-box dashboard-async dashboard-chart" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Clima das 1:1s"><span class="dashboard-placeholder" aria-hidden="true"></span><canvas id="chartSentiment"></canvas></div>
                     </div>
                     <div class="panel chart-panel">
                         <h4>Cadência mensal de 1:1s</h4>
                         <p class="chart-hint">Últimos 6 meses · Meta: ao menos 1 conversa por mês com cada pessoa do time ativo atual. Cada pessoa conta uma vez por mês.</p>
-                        <div class="chart-box"><canvas id="chartCadence"></canvas></div>
+                        <div class="chart-box dashboard-async dashboard-chart" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Cadência mensal de 1:1s"><span class="dashboard-placeholder" aria-hidden="true"></span><canvas id="chartCadence"></canvas></div>
                     </div>
                     <div class="panel chart-panel">
                         <h4>Fluxo de combinados</h4>
                         <p class="chart-hint">Criados vs. concluídos por semana, nas últimas 12 semanas.</p>
-                        <div class="chart-box"><canvas id="chartCommitments"></canvas></div>
+                        <div class="chart-box dashboard-async dashboard-chart" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Fluxo de combinados"><span class="dashboard-placeholder" aria-hidden="true"></span><canvas id="chartCommitments"></canvas></div>
                     </div>
                 </div>
 
                 <!-- Painéis qualitativos -->
                 <div class="insights-grid">
-                    <div class="panel">
+                    <div class="panel dashboard-async" :class="{'is-loading': dashLoading || dashCardsLoading}" :aria-busy="dashLoading || dashCardsLoading" aria-label="Riscos e pontos de atenção">
+                        <span class="dashboard-placeholder" aria-hidden="true"></span>
                         <h4>⚠️ Riscos e pontos de atenção</h4>
-                        <template x-if="riskFeed.length === 0">
+                        <template x-if="!dashLoading && !dashCardsLoading && !dashError && !dashCardsError && riskFeed.length === 0">
                             <p class="form-hint">Nenhum sinal individual mapeado. Gere os Cards do Time e extraia insights das 1:1s para alimentar este radar.</p>
                         </template>
                         <ul class="insight-list">
@@ -227,9 +244,10 @@
                             </template>
                         </ul>
                     </div>
-                    <div class="panel">
+                    <div class="panel dashboard-async" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Conquistas recentes">
+                        <span class="dashboard-placeholder" aria-hidden="true"></span>
                         <h4>🏆 Conquistas recentes</h4>
-                        <template x-if="!dash || dash.recent_wins.length === 0">
+                        <template x-if="!dashLoading && dash && dash.recent_wins.length === 0">
                             <p class="form-hint">Nenhuma conquista registrada ainda. Elas aparecem aqui a partir da extração IA das 1:1s — reconheça em público!</p>
                         </template>
                         <ul class="insight-list">
@@ -245,9 +263,10 @@
                             </template>
                         </ul>
                     </div>
-                    <div class="panel">
+                    <div class="panel dashboard-async" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Temas dos 1:1s">
+                        <span class="dashboard-placeholder" aria-hidden="true"></span>
                         <h4>🔥 Temas dos 1:1s (60 dias)</h4>
-                        <template x-if="!dash || dash.top_topics.length === 0">
+                        <template x-if="!dashLoading && dash && dash.top_topics.length === 0">
                             <p class="form-hint">Os tópicos mais recorrentes das 1:1s aparecem aqui após a extração IA.</p>
                         </template>
                         <div class="tag-row">
@@ -259,16 +278,16 @@
                 </div>
                 <div class="meeting-section-heading"><h3 class="section-title">Estratégia e execução</h3><button type="button" class="btn-link" @click="go('meetings')">Ver reuniões →</button></div>
                 <div class="meeting-kpis">
-                    <div class="panel"><strong x-text="meetingContext.kpis.meetings_30d ?? 0"></strong><span>reuniões nos últimos 30 dias</span></div>
-                    <div class="panel"><strong x-text="meetingContext.kpis.open_actions ?? 0"></strong><span>ações de reuniões em aberto</span></div>
-                    <div class="panel" :class="{'meeting-overdue-kpi': meetingContext.kpis.overdue_actions > 0}"><strong x-text="meetingContext.kpis.overdue_actions ?? 0"></strong><span>ações de reuniões vencidas</span></div>
+                    <div class="panel dashboard-async dashboard-metric" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Reuniões recentes"><span class="dashboard-placeholder" aria-hidden="true"></span><strong x-text="meetingContext.kpis.meetings_30d ?? '—'"></strong><span>reuniões nos últimos 30 dias</span></div>
+                    <div class="panel dashboard-async dashboard-metric" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Ações de reuniões em aberto"><span class="dashboard-placeholder" aria-hidden="true"></span><strong x-text="meetingContext.kpis.open_actions ?? '—'"></strong><span>ações de reuniões em aberto</span></div>
+                    <div class="panel dashboard-async dashboard-metric" :class="{'meeting-overdue-kpi': meetingContext.kpis.overdue_actions > 0, 'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Ações de reuniões vencidas"><span class="dashboard-placeholder" aria-hidden="true"></span><strong x-text="meetingContext.kpis.overdue_actions ?? '—'"></strong><span>ações de reuniões vencidas</span></div>
                 </div>
-                <div class="meeting-strategy-grid" x-show="meetingContext.strategic_themes.length || meetingContext.decisions.length || meetingContext.risks.length || meetingContext.opportunities.length">
+                <div class="meeting-strategy-grid" x-show="dashLoading || meetingContext.strategic_themes.length || meetingContext.decisions.length || meetingContext.risks.length || meetingContext.opportunities.length">
                     <template x-for="group in [{key:'strategic_themes', title:'Temas estratégicos'}, {key:'decisions', title:'Decisões recentes'}, {key:'risks', title:'Riscos dos fóruns'}, {key:'opportunities', title:'Oportunidades'}]" :key="group.key">
-                        <div class="panel" x-show="meetingContext[group.key].length"><h4 x-text="group.title"></h4><ul class="insight-list"><template x-for="(item, index) in meetingContext[group.key].slice(0, 4)" :key="index"><li><p x-text="item.text"></p><button type="button" class="meeting-source-link" @click="viewMeeting(item.meeting_id)" x-text="(item.forum || item.title || 'Reunião') + ' · ' + fmtDate(item.occurred_on)"></button></li></template></ul></div>
+                        <div class="panel dashboard-async" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" :aria-label="group.title" :inert="dashLoading" x-show="dashLoading || meetingContext[group.key].length"><span class="dashboard-placeholder" aria-hidden="true"></span><h4 x-text="group.title"></h4><ul class="insight-list"><template x-for="(item, index) in meetingContext[group.key].slice(0, 4)" :key="index"><li><p x-text="item.text"></p><button type="button" class="meeting-source-link" @click="viewMeeting(item.meeting_id)" x-text="(item.forum || item.title || 'Reunião') + ' · ' + fmtDate(item.occurred_on)"></button></li></template></ul></div>
                     </template>
                 </div>
-                <div class="panel meeting-tactical-plan" x-show="meetingContext.actions.length"><h4>Plano tático dos fóruns</h4><template x-for="action in meetingContext.actions.slice(0, 8)" :key="action.id"><div class="meeting-context-action"><div><button type="button" class="meeting-text-link" @click="viewMeeting(action.meeting_id)" x-text="action.description"></button><small class="form-hint" x-text="(action.owner_name || 'Sem responsável') + ' · ' + (action.forum || action.meeting_title || 'Reunião')"></small></div><span class="form-hint meeting-action-date" :class="{'text-warn': action.is_overdue}" x-text="action.due_date ? fmtDate(action.due_date) + (action.is_overdue ? ' · vencida' : '') : 'Sem prazo'"></span></div></template></div>
+                <div class="panel meeting-tactical-plan dashboard-async" :class="{'is-loading': dashLoading}" :aria-busy="dashLoading" aria-label="Plano tático dos fóruns" :inert="dashLoading" x-show="dashLoading || meetingContext.actions.length"><span class="dashboard-placeholder" aria-hidden="true"></span><h4>Plano tático dos fóruns</h4><template x-for="action in meetingContext.actions.slice(0, 8)" :key="action.id"><div class="meeting-context-action"><div><button type="button" class="meeting-text-link" @click="viewMeeting(action.meeting_id)" x-text="action.description"></button><small class="form-hint" x-text="(action.owner_name || 'Sem responsável') + ' · ' + (action.forum || action.meeting_title || 'Reunião')"></small></div><span class="form-hint meeting-action-date" :class="{'text-warn': action.is_overdue}" x-text="action.due_date ? fmtDate(action.due_date) + (action.is_overdue ? ' · vencida' : '') : 'Sem prazo'"></span></div></template></div>
             </section>
 
             <!-- ===== REUNIÕES DE FÓRUNS ===== -->

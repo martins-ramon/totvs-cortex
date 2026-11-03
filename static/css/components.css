@@ -1205,6 +1205,74 @@ input:checked + .slider:before {
    Dashboard "Início" — radar do time, gráficos e insights
    ============================================================ */
 
+/* Um único brilho lento por bloco, sem animar seus descendentes. */
+.dashboard-async { position: relative; }
+.dashboard-async > .dashboard-placeholder {
+    display: none;
+    position: absolute;
+    inset: 1.4rem;
+    overflow: hidden;
+    border-radius: 6px;
+    pointer-events: none;
+    background:
+        linear-gradient(#EDF1F6, #EDF1F6) 0 0 / 58% 12px no-repeat,
+        linear-gradient(#F1F4F8, #F1F4F8) 0 28px / 94% 10px no-repeat,
+        linear-gradient(#F1F4F8, #F1F4F8) 0 54px / 76% 10px no-repeat,
+        linear-gradient(#F1F4F8, #F1F4F8) 0 80px / 86% 10px no-repeat;
+}
+.dashboard-async.is-loading > .dashboard-placeholder { display: block; }
+.dashboard-async.is-loading > :not(.dashboard-placeholder):not(h4) { visibility: hidden; }
+.dashboard-async.is-loading > .dashboard-placeholder::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,0.65) 50%, transparent 80%);
+    transform: translateX(-100%);
+    animation: dashboard-shimmer 2.4s ease-in-out infinite;
+}
+.dashboard-async:not(.is-loading) > :not(.dashboard-placeholder):not(h4) {
+    animation: dashboard-reveal 280ms ease-out both;
+}
+.stat-card.dashboard-async { min-height: 136px; }
+.stat-card.dashboard-async > .dashboard-placeholder,
+.panel.dashboard-metric > .dashboard-placeholder {
+    inset: 1.25rem 1.5rem;
+    background:
+        linear-gradient(#E9EEF5, #E9EEF5) 0 0 / 38% 36px no-repeat,
+        linear-gradient(#F1F4F8, #F1F4F8) 0 48px / 90% 11px no-repeat,
+        linear-gradient(#F1F4F8, #F1F4F8) 0 68px / 65% 11px no-repeat;
+}
+.panel.dashboard-async.is-loading { min-height: 180px; }
+.panel.dashboard-async:not(.dashboard-metric) > .dashboard-placeholder { top: 3.8rem; }
+.panel.dashboard-metric.is-loading { min-height: 124px; }
+.dashboard-radar.is-loading { min-height: 244px; background: white; border-radius: 12px; }
+.dashboard-radar > .dashboard-placeholder {
+    background:
+        repeating-linear-gradient(to bottom, #EDF1F6 0 12px, transparent 12px 48px) 0 0 / 28% 100% no-repeat,
+        repeating-linear-gradient(to bottom, #F1F4F8 0 12px, transparent 12px 48px) 44% 0 / 17% 100% no-repeat,
+        repeating-linear-gradient(to bottom, #F1F4F8 0 12px, transparent 12px 48px) 98% 0 / 30% 100% no-repeat;
+}
+.dashboard-chart > .dashboard-placeholder {
+    inset: 12px 0 8px;
+    border-bottom: 1px solid #EDF1F6;
+    background:
+        linear-gradient(#EDF1F6, #EDF1F6) 6% 100% / 10% 34% no-repeat,
+        linear-gradient(#EDF1F6, #EDF1F6) 25% 100% / 10% 57% no-repeat,
+        linear-gradient(#EDF1F6, #EDF1F6) 44% 100% / 10% 45% no-repeat,
+        linear-gradient(#EDF1F6, #EDF1F6) 63% 100% / 10% 74% no-repeat,
+        linear-gradient(#EDF1F6, #EDF1F6) 82% 100% / 10% 62% no-repeat;
+}
+.dashboard-inline { display: inline-flex; align-items: center; min-width: 5rem; min-height: 1.75rem; }
+.dashboard-inline > .dashboard-placeholder { inset: 0; background: #EDF1F6; border-radius: 20px; }
+.dashboard-error { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem; padding: 0.85rem 1rem; border: 1px solid #E2E8F0; border-radius: 10px; color: #64748B; font-size: 0.875rem; }
+@keyframes dashboard-shimmer { to { transform: translateX(100%); } }
+@keyframes dashboard-reveal { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+    .dashboard-async.is-loading > .dashboard-placeholder::after,
+    .dashboard-async:not(.is-loading) > :not(.dashboard-placeholder):not(h4) { animation: none; }
+    .dashboard-async.is-loading > .dashboard-placeholder::after { display: none; }
+}
+
 /* KPI de saúde do time */
 .stat-card.stat-health-red { border-top-color: #EF4444; }
 .stat-card.stat-health-yellow { border-top-color: #F59E0B; }

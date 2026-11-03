@@ -21,6 +21,11 @@ function cortexApp() {
         calendarRequestId: 0,
         recentSessions: [],
         dash: null,
+        dashLoading: true,
+        dashCardsLoading: true,
+        dashError: '',
+        dashCardsError: '',
+        dashRequestId: 0,
         get meetingContext() {
             const context = this.dash?.meeting_context || {};
             return { kpis: {}, strategic_themes: [], decisions: [], risks: [], opportunities: [], actions: [], ...context };
@@ -198,17 +203,41 @@ function cortexApp() {
 
         // --- dashboard (home) ---
         async loadDashboard() {
-            try {
-                const [d, c] = await Promise.all([
-                    this.api('/api/dashboard'),
-                    this.cardsLoaded ? Promise.resolve(null) : this.api('/api/cards/latest')
-                ]);
-                this.dash = d;
-                if (c) { this.cards = c.cards; this.cardsLoaded = true; }
-                this.$nextTick(() => this.renderDashCharts());
-            } catch (e) {
-                showToast(e.message, 'error');
-            }
+            const requestId = ++this.dashRequestId;
+            this.dashLoading = true;
+            this.dashCardsLoading = !this.cardsLoaded;
+            this.dashError = '';
+            this.dashCardsError = '';
+
+            // Cada fonte libera seus blocos assim que estiver pronta.
+            await Promise.all([
+                (async () => {
+                    try {
+                        const d = await this.api('/api/dashboard');
+                        if (requestId === this.dashRequestId) this.dash = d;
+                    } catch (e) {
+                        if (requestId === this.dashRequestId) this.dashError = 'Não foi possível atualizar os indicadores. Tente novamente.';
+                    } finally {
+                        if (requestId === this.dashRequestId) {
+                            this.dashLoading = false;
+                            this.$nextTick(() => this.renderDashCharts());
+                        }
+                    }
+                })(),
+                (async () => {
+                    if (this.cardsLoaded) return;
+                    try {
+                        const c = await this.api('/api/cards/latest');
+                        if (requestId !== this.dashRequestId) return;
+                        this.cards = c.cards;
+                        this.cardsLoaded = true;
+                    } catch (e) {
+                        if (requestId === this.dashRequestId) this.dashCardsError = 'Não foi possível atualizar os cards de saúde. Tente novamente.';
+                    } finally {
+                        if (requestId === this.dashRequestId) this.dashCardsLoading = false;
+                    }
+                })()
+            ]);
         },
 
         renderDashCharts() {
@@ -225,6 +254,7 @@ function cortexApp() {
             const baseOpts = {
                 responsive: true,
                 maintainAspectRatio: false,
+                animation: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? false : { duration: 300 },
                 plugins: {
                     legend: { position: 'bottom', labels: { boxWidth: 12, font: { family: 'Inter', size: 11 } } }
                 },
