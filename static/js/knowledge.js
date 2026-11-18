@@ -655,10 +655,13 @@ function cortexKnowledge() {
             return progress ? this.knowledgeSyncTotal - progress.remaining - progress.failed + (progress.partial || 0) : 0;
         },
         knowledgeSyncQueueLabel() {
+            if (!this.knowledgeSyncTotal) return '';
+            const percent = Math.floor(this.knowledgeSyncValue() * 1000 / this.knowledgeSyncTotal) / 10;
+            const label = `${percent.toLocaleString('pt-BR')}% do processamento`;
             const remaining = this.knowledgeSyncSnapshot?.remaining;
-            if (remaining === 1) return '1 conversa na fila';
-            if (remaining > 1) return `${remaining} de ${this.knowledgeSyncTotal} conversas ainda na fila`;
-            return 'Nenhuma conversa na fila';
+            if (remaining === 1) return `${label} · 1 conversa a concluir`;
+            if (remaining > 1) return `${label} · ${remaining} conversas a concluir`;
+            return label;
         },
         knowledgeSyncMessage() {
             const stage = this.knowledgeSyncStage;

@@ -221,17 +221,19 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     assert.equal(posts.length, 1);
     assert.equal(app.knowledgeSyncTotal, 2);
     assert.equal(app.knowledgeSyncValue(), 0);
+    assert.equal(app.knowledgeSyncQueueLabel(), '0% do processamento · 2 conversas a concluir');
     assert.match(app.knowledgeSyncMessage(), /Verificando/);
 
     const extracting = advance(800);
-    polls[0](state(2, 0, active, 0.5));
+    polls[0](state(2, 0, active, 1 / 3));
     await extracting;
     assert.match(app.knowledgeSyncMessage(), /Analisando/);
     assert.equal(app.knowledgeSyncDetail(), 'Reunião · Revisão semanal · Trecho 2 de 3');
-    assert.equal(app.knowledgeSyncValue(), 0.5);
+    assert.equal(app.knowledgeSyncValue(), 1 / 3);
+    assert.equal(app.knowledgeSyncQueueLabel(), '16,6% do processamento · 2 conversas a concluir');
 
     const publishing = advance(1500);
-    polls[1](state(2, 0, { ...active, phase: 'publishing' }, 0.5));
+    polls[1](state(2, 0, { ...active, phase: 'publishing' }, 1 / 3));
     await publishing;
     assert.match(app.knowledgeSyncMessage(), /Salvando/);
 
@@ -240,7 +242,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     await flush();
     assert.match(app.knowledgeSyncMessage(), /Preparando/);
     assert.equal(app.knowledgeSyncValue(), 1.5);
-    assert.equal(app.knowledgeSyncQueueLabel(), '1 conversa na fila');
+    assert.equal(app.knowledgeSyncQueueLabel(), '75% do processamento · 1 conversa a concluir');
     polls[2](state(2, 0, active));
     await delayed;
     assert.equal(app.knowledgeSyncValue(), 1.5);
@@ -256,6 +258,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     assert.equal(app.knowledgeSyncValue(), 1);
     assert.equal(app.knowledgeSyncTotal, 2);
     assert.match(app.knowledgeSyncMessage(), /com pendências/);
+    assert.equal(app.knowledgeSyncQueueLabel(), '50% do processamento');
     assert.equal(app.knowledgeSyncDetail(), '1 conversa precisa de nova tentativa.');
 
     const retry = app.syncKnowledge(true);
@@ -266,6 +269,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     await retry;
     assert.equal(app.knowledgeSyncValue(), 1);
     assert.equal(app.knowledgeSyncMessage(), 'Memória atualizada.');
+    assert.equal(app.knowledgeSyncQueueLabel(), '100% do processamento');
     assert.equal(timers.size, 0);
 
     const disabled = app.syncKnowledge();
