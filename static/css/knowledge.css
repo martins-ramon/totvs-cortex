@@ -157,12 +157,27 @@
 .knowledge-filter-meta { display: flex; align-items: center; gap: .65rem; margin-top: .55rem; }
 .knowledge-filter-meta span { padding: .2rem .65rem; border-radius: 20px; background: #eef2ff; color: var(--knowledge-accent); font-size: .78rem; }
 .knowledge-filter-meta .btn-link { color: var(--knowledge-accent); font-size: .8rem; }
-.knowledge-sync-status { display: flex; align-items: center; gap: .4rem .55rem; flex-wrap: wrap; margin: 0 0 1rem .1rem; color: var(--knowledge-muted); font-size: .8rem; }
+.knowledge-sync-status {
+  --knowledge-progress-color: var(--knowledge-accent);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .65rem 1rem;
+  margin-bottom: 1rem;
+  padding: .75rem .9rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 12px;
+  background: #f5f6ff;
+  color: var(--knowledge-muted);
+  font-size: .8rem;
+}
+.knowledge-sync-status.is-complete { --knowledge-progress-color: #047857; background: #f0fdf4; border-color: #bbf7d0; }
+.knowledge-sync-status.needs-attention { --knowledge-progress-color: #a16207; background: #fffbeb; border-color: #fde68a; }
 .knowledge-sync-status .btn-link { color: var(--knowledge-accent); font-size: inherit; }
-.knowledge-sync-dot { width: .45rem; height: .45rem; border-radius: 100%; background: #a16207; }
-.knowledge-sync-dot.is-active { background: #6366f1; animation: knowledge-pulse 1.45s ease-in-out infinite alternate; }
-@keyframes knowledge-pulse { to { opacity: .38; } }
-@media(prefers-reduced-motion:reduce) { .knowledge-sync-dot.is-active { animation: none; } }
+.knowledge-sync-message { display: grid; gap: .2rem; flex: 1 1 13rem; min-width: 0; overflow-wrap: anywhere; }
+.knowledge-sync-message strong { color: var(--knowledge-ink); font-size: .86rem; }
+.knowledge-sync-progress { display: grid; gap: .25rem; flex: 1 0 100%; font-variant-numeric: tabular-nums; }
+.knowledge-sync-progress progress { width: 100%; height: .55rem; accent-color: var(--knowledge-progress-color); }
 
 .knowledge-workspace { display: grid; grid-template-columns: minmax(0,1fr); gap: 1rem; align-items: start; }
 .knowledge-workspace.knowledge-has-inspector { grid-template-columns: minmax(0,1.35fr) minmax(325px,1fr); }

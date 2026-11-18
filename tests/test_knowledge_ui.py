@@ -8,8 +8,9 @@ import unittest
 @unittest.skipUnless(shutil.which('node'), 'Node não disponível para validar o cliente JavaScript')
 class KnowledgeClientTests(unittest.TestCase):
     def run_javascript(self, script):
-        source = pathlib.Path(__file__).resolve().parents[1] / 'static/js/knowledge.js'
-        completed = subprocess.run(['node', '-e', script, str(source)], capture_output=True,
+        source = pathlib.Path(__file__).resolve().parents[1] / 'static/js'
+        files = [str(source / file) for file in ('knowledge.js', 'meetings.js', 'app.js')]
+        completed = subprocess.run(['node', '-e', script, *files], capture_output=True,
                                    text=True, timeout=15)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
@@ -103,7 +104,11 @@ vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
 const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert/strict');
-const context = vm.createContext({ URLSearchParams, setTimeout: callback => callback() });
+const context = vm.createContext({
+    URLSearchParams,
+    setTimeout: (callback, delay) => { if (delay !== 800) callback(); },
+    clearTimeout() {}
+});
 vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
 (async () => {
     const app = context.cortexKnowledge();
@@ -124,7 +129,10 @@ vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
     let steps = [];
     app.api = async (path, options) => {
         requests.push(path);
-        if (path === '/api/knowledge/status') return { enabled: true, has_pending: true, can_sync: true };
+        if (path === '/api/knowledge/status') return {
+            enabled: true, has_pending: true, can_sync: true,
+            sync_progress: { remaining: 2, failed: 0, active: null }
+        };
         if (path.startsWith('/api/knowledge/claims?')) return { claims: [{ content: 'Atlas aprovado' }] };
         if (path.startsWith('/api/knowledge/graph?'))
             return { nodes: [entity, ...claims], edges };
@@ -133,7 +141,10 @@ vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
             assert.equal(options.method, 'POST');
             steps.push(JSON.parse(options.body));
             app.knowledgeFilters.q = 'busca ainda não enviada';
-            return { has_pending: steps.length === 1, can_sync: true, updated: true };
+            return {
+                has_pending: steps.length === 1, can_sync: true, updated: true,
+                sync_progress: { remaining: 2 - steps.length, failed: 0, active: null }
+            };
         }
         throw new Error('Rota inesperada: ' + path);
     };
@@ -142,6 +153,8 @@ vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
     assert.equal(app.knowledgeMode, 'list');
     assert.deepEqual(steps, [{}, {}]);
     assert.equal(app.knowledgeSyncing, false);
+    assert.equal(app.knowledgeSyncMessage(), 'Memória atualizada.');
+    assert.equal(app.knowledgeSyncValue(), 2);
     assert.equal(refreshed, 1);
     assert.equal(app.knowledgeClaims[0].content, 'Atlas aprovado');
     assert.deepEqual(JSON.parse(JSON.stringify(app.knowledgeShared)), [
@@ -155,5 +168,116 @@ vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
     assert.deepEqual(steps, [{ retry: true }, {}]);
     assert.equal(app.knowledgeSyncing, false);
     assert.equal(refreshed, 2);
+})().catch(error => { process.stderr.write(error.stack); process.exitCode = 1; });
+''')
+
+    def test_sync_progress_live_phases_partial_results_and_retry(self):
+        self.run_javascript(r'''
+const fs = require('fs');
+const vm = require('vm');
+const assert = require('assert/strict');
+const timers = new Map();
+let timerId = 0;
+const context = vm.createContext({
+    window: {},
+    setTimeout: (callback, delay) => { timers.set(++timerId, { callback, delay }); return timerId; },
+    clearTimeout: id => timers.delete(id)
+});
+for (const source of process.argv.slice(1)) vm.runInContext(fs.readFileSync(source, 'utf8'), context);
+function advance(delay) {
+    const entry = [...timers].find(([, timer]) => timer.delay === delay);
+    assert.ok(entry, 'Temporizador ausente: ' + delay);
+    const [id, timer] = entry;
+    timers.delete(id);
+    return timer.callback();
+}
+function state(remaining, failed = 0, active = null, partial = 0) {
+    return {
+        can_sync: true, has_pending: remaining > 0, needs_attention: failed > 0,
+        sync_progress: { remaining, failed, active, partial }
+    };
+}
+const flush = () => new Promise(resolve => setImmediate(resolve));
+(async () => {
+    const app = context.window.cortexApp();
+    app.view = 'knowledge';
+    app.knowledgeStatus = state(2);
+    app.loadKnowledge = async () => {};
+    app.knowledgeRefreshConsumers = () => {};
+    const posts = [];
+    const polls = [];
+    app.api = (path, options) => {
+        assert.equal(path, '/api/knowledge/sync');
+        return new Promise((resolve, reject) => {
+            if (options.method === 'POST') posts.push({ payload: JSON.parse(options.body), resolve, reject });
+            else polls.push(resolve);
+        });
+    };
+
+    const active = { kind: 'meeting', id: 17, title: 'Revisão semanal', phase: 'extracting',
+        segments_completed: 1, segments_total: 3 };
+    const syncing = app.syncKnowledge();
+    await app.syncKnowledge(true);
+    assert.equal(posts.length, 1);
+    assert.equal(app.knowledgeSyncTotal, 2);
+    assert.equal(app.knowledgeSyncValue(), 0);
+    assert.match(app.knowledgeSyncMessage(), /Verificando/);
+
+    const extracting = advance(800);
+    polls[0](state(2, 0, active, 0.5));
+    await extracting;
+    assert.match(app.knowledgeSyncMessage(), /Analisando/);
+    assert.equal(app.knowledgeSyncDetail(), 'Reunião · Revisão semanal · Trecho 2 de 3');
+    assert.equal(app.knowledgeSyncValue(), 0.5);
+
+    const publishing = advance(1500);
+    polls[1](state(2, 0, { ...active, phase: 'publishing' }, 0.5));
+    await publishing;
+    assert.match(app.knowledgeSyncMessage(), /Salvando/);
+
+    const delayed = advance(1500);
+    posts[0].resolve({ ...state(1, 0, null, 0.5), updated: true });
+    await flush();
+    assert.match(app.knowledgeSyncMessage(), /Preparando/);
+    assert.equal(app.knowledgeSyncValue(), 1.5);
+    assert.equal(app.knowledgeSyncQueueLabel(), '1 conversa na fila');
+    polls[2](state(2, 0, active));
+    await delayed;
+    assert.equal(app.knowledgeSyncValue(), 1.5);
+    assert.equal(app.knowledgeSyncDetail(), '');
+
+    advance(250);
+    await flush();
+    assert.equal(posts.length, 2);
+    posts[1].resolve(state(0, 1));
+    await syncing;
+    assert.equal(app.knowledgeSyncing, false);
+    assert.equal(timers.size, 0);
+    assert.equal(app.knowledgeSyncValue(), 1);
+    assert.equal(app.knowledgeSyncTotal, 2);
+    assert.match(app.knowledgeSyncMessage(), /com pendências/);
+    assert.equal(app.knowledgeSyncDetail(), '1 conversa precisa de nova tentativa.');
+
+    const retry = app.syncKnowledge(true);
+    assert.deepEqual(posts[2].payload, { retry: true });
+    assert.equal(app.knowledgeSyncValue(), 0);
+    assert.equal(app.knowledgeSyncTotal, 1);
+    posts[2].resolve({ ...state(0), updated: true });
+    await retry;
+    assert.equal(app.knowledgeSyncValue(), 1);
+    assert.equal(app.knowledgeSyncMessage(), 'Memória atualizada.');
+    assert.equal(timers.size, 0);
+
+    const disabled = app.syncKnowledge();
+    posts[3].resolve({ ...state(0), can_sync: false });
+    await disabled;
+    assert.equal(app.knowledgeSyncMessage(), 'A atualização automática está indisponível.');
+
+    const disconnected = app.syncKnowledge();
+    posts[4].reject(new Error('Falha simulada de conexão'));
+    await disconnected;
+    assert.match(app.knowledgeSyncMessage(), /Não foi possível atualizar/);
+    assert.equal(app.knowledgeSyncing, false);
+    assert.equal(timers.size, 0);
 })().catch(error => { process.stderr.write(error.stack); process.exitCode = 1; });
 ''')

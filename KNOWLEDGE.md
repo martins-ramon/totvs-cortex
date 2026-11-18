@@ -95,15 +95,16 @@ Configure `KNOWLEDGE_ENABLED=1` e, para diretor único,
 `OPENAI_API_KEY` habilita a extração. Ao salvar uma transcrição ou notas no
 Cortex, o navegador inicia a atualização dessa conversa. Ao abrir **Memória**,
 o Cortex retoma o que ficou pendente e inclui transcrições e notas do histórico.
-A atualização avança enquanto o navegador estiver aberto e pode continuar na
-próxima visita à Memória. Cada requisição faz no máximo uma chamada de IA e
-registra o progresso no banco antes de responder.
+A barra acompanha a fila e os trechos processados. O status identifica a
+conversa em análise e indica quando o Cortex está salvando as conexões. A
+atualização do histórico pode ser retomada na próxima visita à Memória. Cada
+etapa faz no máximo uma chamada de IA e registra o progresso no banco.
 
 A lista mostra conexões e registros com suas fontes. Abra um deles para
 conferir o trecho original. Use a busca para acompanhar uma pessoa, um projeto
 ou um assunto em várias conversas. O mapa oferece outra visualização dos
 mesmos registros. Se alguma conversa continuar pendente após uma falha,
-**Atualizar memória** retoma a atualização.
+**Tentar novamente** retoma a atualização.
 
 O CLI segue disponível para manutenção com limites explícitos por execução.
 

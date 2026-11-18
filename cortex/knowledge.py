@@ -485,6 +485,7 @@ def process_job(job_id, user_id=None):
         version = dict(db.execute(text('SELECT * FROM knowledge_versions WHERE id=:id'), {'id': job['version_id']}).mappings().first())
         parts = list(segments(version['source_text']))
         cursor = (job['cursor_json'] or {}).get('segment', 0)
+        done = cursor + 1 >= len(parts)
         has_content = cursor < len(parts) and bool(parts[cursor]['text'].strip(SOURCE_WHITESPACE))
         if has_content:
             entities, tasks = sync_people(db), _tasks(db)
@@ -492,10 +493,12 @@ def process_job(job_id, user_id=None):
             existing_claims = [_claim(r) for r in db.execute(text(
                 'SELECT ' + _COLUMNS + ' ' + _JOINS + " WHERE (c.active OR (c.review_state='rejected' AND c.human_fields<>'{}'::jsonb))"
                 + " AND (c.source_id IS NULL OR NOT s.deleted) ORDER BY c.id")).mappings().all()]
+        activity = {'extraction_revision': EXTRACTION_REVISION, 'segments_total': len(parts),
+                    'sync_phase': 'publishing' if done and not has_content else 'extracting'}
         db.execute(text("""UPDATE knowledge_jobs SET status='running',lease_token=:token,
             lease_until=CURRENT_TIMESTAMP+INTERVAL '90 seconds',attempts=attempts+1,
-            metrics_json=metrics_json || CAST(:revision AS JSONB),updated_at=CURRENT_TIMESTAMP WHERE id=:id"""),
-            {'id': job_id, 'token': token, 'revision': _json({'extraction_revision': EXTRACTION_REVISION})})
+            metrics_json=metrics_json || CAST(:activity AS JSONB),updated_at=CURRENT_TIMESTAMP WHERE id=:id"""),
+            {'id': job_id, 'token': token, 'activity': _json(activity)})
         db.commit()
     finally:
         db.close()
@@ -522,6 +525,14 @@ def process_job(job_id, user_id=None):
         return {'job_id': job_id, 'status': 'error', 'error': 'Falha na extração ou validação; a fonte foi preservada.'}
     db = session_factory()
     try:
+        if done and has_content:
+            # Torna a etapa visível enquanto a transação de publicação está aberta.
+            activity = db.execute(text("""UPDATE knowledge_jobs
+                SET metrics_json=jsonb_set(metrics_json,'{sync_phase}','"publishing"'::jsonb)
+                WHERE id=:id AND lease_token=:token"""), {'id': job_id, 'token': token})
+            db.commit()
+            if not activity.rowcount:
+                return {'job_id': job_id, 'status': 'superseded'}
         source = db.execute(text('SELECT * FROM knowledge_sources WHERE id=:id FOR UPDATE'), {'id': version['source_id']}).mappings().first()
         job = db.execute(text('SELECT * FROM knowledge_jobs WHERE id=:id FOR UPDATE'), {'id': job_id}).mappings().first()
         if not source or not job or job['lease_token'] != token or source['deleted'] or source['current_version_id'] != version['id']:
@@ -542,7 +553,6 @@ def process_job(job_id, user_id=None):
         combined['segments_total'] = len(parts)
         combined['claims'] = len(staged)
         combined['needs_review'] = sum(bool(c.get('unresolved')) or c.get('classification') in {'perception','hypothesis','proposal'} for c in staged)
-        done = cursor + 1 >= len(parts)
         if done:
             _publish(db, dict(source), version, staged, user_id)
         db.execute(text('''UPDATE knowledge_jobs SET status=:status,attempts=0,lease_token=NULL,lease_until=NULL,

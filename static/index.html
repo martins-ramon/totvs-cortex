@@ -151,10 +151,19 @@
                             <button type="button" class="btn-link" @click="clearKnowledgeFilters()">Limpar filtros</button>
                         </div>
                     </form>
-                    <div class="knowledge-sync-status" role="status" x-show="knowledgeSyncing || knowledgeSyncError || knowledgeStatus.needs_attention">
-                        <span class="knowledge-sync-dot" :class="{'is-active': knowledgeSyncing}" aria-hidden="true"></span>
-                        <span x-text="knowledgeSyncing ? 'Atualizando a memória…' : (knowledgeSyncError || (knowledgeStatus.can_sync ? 'Algumas conversas ainda não aparecem na memória.' : 'A atualização automática está indisponível.'))"></span>
-                        <button type="button" class="btn-link" x-show="!knowledgeSyncing && knowledgeStatus.can_sync" @click="syncKnowledge(true)">Atualizar memória</button>
+                    <div class="knowledge-sync-status" x-show="knowledgeSyncMessage()"
+                         :class="{'is-complete': knowledgeSyncStage === 'complete' && !knowledgeStatus.needs_attention, 'needs-attention': !knowledgeSyncing && (knowledgeSyncError || knowledgeStatus.needs_attention)}">
+                        <div class="knowledge-sync-message" role="status" aria-atomic="true">
+                            <strong x-text="knowledgeSyncMessage()"></strong>
+                            <span x-show="knowledgeSyncDetail()" x-text="knowledgeSyncDetail()"></span>
+                        </div>
+                        <button type="button" class="btn-link" x-show="!knowledgeSyncing && knowledgeStatus.can_sync && (knowledgeSyncError || knowledgeStatus.needs_attention)" @click="syncKnowledge(true)">Tentar novamente</button>
+                        <div class="knowledge-sync-progress" x-show="knowledgeSyncing || knowledgeSyncTotal > 0">
+                            <progress x-show="knowledgeSyncTotal === 0" aria-label="Andamento da atualização da memória"></progress>
+                            <progress x-show="knowledgeSyncTotal > 0" :max="knowledgeSyncTotal || 1" :value="knowledgeSyncValue()"
+                                      aria-label="Progresso da fila de conversas" aria-describedby="knowledge-sync-count"></progress>
+                            <span id="knowledge-sync-count" x-show="knowledgeSyncTotal > 0" x-text="knowledgeSyncQueueLabel()"></span>
+                        </div>
                     </div>
                     <div class="knowledge-workspace" :class="{'knowledge-has-inspector': knowledgeSelected || knowledgeEntityForm || knowledgeRelationForm}">
                         <div class="knowledge-overview">

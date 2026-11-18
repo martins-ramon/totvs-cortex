@@ -157,6 +157,101 @@ class KnowledgePostgresTests(unittest.TestCase):
         self.assertEqual(detail['evidence']['record_id'], old_id)
         self.assertEqual(detail['evidence']['text'], old_quote)
 
+    def test_sync_progress_counts_historical_and_queued_sources_without_writing(self):
+        sid = self.source('Jean Silva: A proposta segue em revisão.')
+        mid = self.source('Marina Costa: O novo plano está em execução.', kind='meeting')
+        with patch.dict(os.environ, {'KNOWLEDGE_ENABLED': '0'}):
+            self.source('Marina Costa: A revisão do projeto foi concluída.', kind='meeting')
+            self.source('\n\u2003', kind='meeting')
+            changed = self.client.put(f'/api/oneonones/{sid}', json={'transcript_raw': 'Jean Silva: O prazo mudou.'})
+            self.assertEqual(changed.status_code, 200, changed.json)
+
+        before = self.sql('SELECT * FROM knowledge_jobs ORDER BY id')
+        self.assertEqual(len(before), 2)
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'ficticio'}), \
+                patch.object(knowledge, 'extract_candidates') as extractor:
+            progress = self.client.get('/api/knowledge/sync')
+            status = self.client.get('/api/knowledge/status')
+            extractor.assert_not_called()
+
+        expected = {'remaining': 3, 'failed': 0, 'partial': 0, 'active': None}
+        self.assertEqual(progress.status_code, 200, progress.json)
+        self.assertTrue(progress.json['has_pending'])
+        self.assertEqual(progress.json['sync_progress'], expected)
+        self.assertEqual(status.json['sync_progress'], expected)
+        self.assertEqual(self.sql('SELECT * FROM knowledge_jobs ORDER BY id'), before)
+        self.assertEqual(self.sql('SELECT kind,record_id FROM knowledge_sources ORDER BY id'),
+                         [{'kind': 'one_on_one', 'record_id': sid}, {'kind': 'meeting', 'record_id': mid}])
+
+    def test_sync_progress_reports_live_segment_lease_and_keeps_source_scope(self):
+        phrase = 'proposta em revisão '
+        long_transcript = 'Jean Silva: ' + phrase * (knowledge_service.SEGMENT_SIZE // len(phrase) + 1)
+        sid = self.source(long_transcript)
+        self.source('Marina Costa: O projeto está em execução.', kind='meeting')
+        payload = {'source': {'kind': 'one_on_one', 'id': sid}}
+        started, release = threading.Event(), threading.Event()
+        publishing, finish_publish = threading.Event(), threading.Event()
+        publish = knowledge._publish
+
+        def post_step():
+            client = self.app.test_client()
+            with client.session_transaction() as session:
+                session['user_id'] = 1
+            return client.post('/api/knowledge/sync', json=payload)
+
+        def extraction(*args):
+            started.set()
+            if not release.wait(timeout=10):
+                raise RuntimeError('O teste não liberou o trecho.')
+            return [], {}
+
+        def publication(*args):
+            publishing.set()
+            if not finish_publish.wait(timeout=10):
+                raise RuntimeError('O teste não liberou a publicação.')
+            return publish(*args)
+
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'ficticio'}), \
+                patch.object(knowledge, 'extract_candidates', side_effect=extraction) as extractor, \
+                patch.object(knowledge, '_publish', side_effect=publication), \
+                ThreadPoolExecutor(max_workers=1) as executor:
+            for completed in range(2):
+                started.clear()
+                release.clear()
+                finish_publish.clear()
+                step = executor.submit(post_step)
+                try:
+                    self.assertTrue(started.wait(timeout=5))
+                    active = {'kind': 'one_on_one', 'id': sid, 'title': 'Conversa fictícia',
+                              'phase': 'extracting', 'segments_completed': completed, 'segments_total': 2}
+                    expected = {'remaining': 2, 'failed': 0, 'partial': completed / 2, 'active': active}
+                    progress = self.client.get('/api/knowledge/sync').json['sync_progress']
+                    self.assertEqual(progress, expected)
+                    duplicate = self.client.post('/api/knowledge/sync', json=payload)
+                    self.assertEqual(duplicate.status_code, 200, duplicate.json)
+                    self.assertFalse(duplicate.json['updated'])
+                    self.assertEqual(duplicate.json['sync_progress'], {**expected, 'remaining': 1})
+                    self.assertEqual(extractor.call_count, completed + 1)
+                    if completed == 1:
+                        release.set()
+                        self.assertTrue(publishing.wait(timeout=5))
+                        progress = self.client.get('/api/knowledge/sync').json['sync_progress']
+                        self.assertEqual(progress, {**expected, 'active': {
+                            **active, 'phase': 'publishing', 'segments_completed': 2}})
+                finally:
+                    release.set()
+                    finish_publish.set()
+                result = step.result(timeout=5)
+                self.assertEqual(result.status_code, 200, result.json)
+                if completed == 0:
+                    self.assertEqual(result.json['sync_progress'],
+                                     {'remaining': 1, 'failed': 0, 'partial': 0.5, 'active': None})
+
+        self.assertFalse(result.json['has_pending'])
+        self.assertEqual(result.json['sync_progress'], {'remaining': 0, 'failed': 0, 'partial': 0, 'active': None})
+        global_progress = self.client.get('/api/knowledge/sync').json['sync_progress']
+        self.assertEqual(global_progress, {'remaining': 1, 'failed': 0, 'partial': 0, 'active': None})
+
     def test_sync_revisits_a_legacy_empty_result_once_and_limits_retries(self):
         sid = self.source('Jean Silva: O plano segue em revisão.')
         jid = self.process(sid, [])
@@ -167,6 +262,7 @@ class KnowledgePostgresTests(unittest.TestCase):
             self.assertTrue(status['has_pending'])
             self.assertTrue(status['needs_attention'])
             self.assertFalse(status['can_sync'])
+            self.assertEqual(status['sync_progress'], {'remaining': 1, 'failed': 0, 'partial': 0, 'active': None})
             self.client.post('/api/knowledge/sync', json={})
             extractor.assert_not_called()
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'ficticio'}):
@@ -176,6 +272,7 @@ class KnowledgePostgresTests(unittest.TestCase):
                     self.assertEqual(result.status_code, 200, result.json)
                 self.assertFalse(result.json['has_pending'])
                 self.assertTrue(result.json['needs_attention'])
+                self.assertEqual(result.json['sync_progress'], {'remaining': 0, 'failed': 1, 'partial': 0, 'active': None})
                 self.client.post('/api/knowledge/sync', json={})
                 self.assertEqual(extractor.call_count, 3)
             with patch.object(knowledge, 'extract_candidates', return_value=([], {})) as extractor:
@@ -183,6 +280,7 @@ class KnowledgePostgresTests(unittest.TestCase):
                 self.assertTrue(result.json['updated'])
                 self.assertFalse(result.json['has_pending'])
                 self.assertFalse(result.json['needs_attention'])
+                self.assertEqual(result.json['sync_progress'], {'remaining': 0, 'failed': 0, 'partial': 0, 'active': None})
                 self.client.post('/api/knowledge/sync', json={})
                 extractor.assert_called_once()
         self.assertEqual(self.sql('SELECT id,status FROM knowledge_jobs'), [{'id': jid, 'status': 'done'}])
@@ -322,7 +420,7 @@ class KnowledgePostgresTests(unittest.TestCase):
         for method, path in [('get','/api/knowledge/entities'), ('get','/api/knowledge/graph'),
             ('get','/api/knowledge/claims/1'), ('put','/api/knowledge/claims/1'),
             ('get','/api/knowledge/export'), ('post','/api/knowledge/jobs/1/run'),
-            ('post','/api/knowledge/sync'),
+            ('get','/api/knowledge/sync'), ('post','/api/knowledge/sync'),
             ('get',f'/api/oneonones/{sid}'), ('get','/api/people/1/prep'),
             ('post','/api/people/1/agenda'), ('get','/api/cards/latest'), ('post','/api/assistant/chat')]:
             with self.subTest(path=path):
@@ -330,6 +428,7 @@ class KnowledgePostgresTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             session.clear()
         self.assertEqual(self.client.get('/api/knowledge/export').status_code, 401)
+        self.assertEqual(self.client.get('/api/knowledge/sync').status_code, 401)
         self.assertEqual(self.client.post('/api/knowledge/sync', json={}).status_code, 401)
         # RLS is effective even with SELECT granted to an unprivileged local role.
         with self.engine.begin() as conn:

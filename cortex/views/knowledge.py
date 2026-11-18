@@ -115,12 +115,16 @@ def filters():
     return values
 
 
+def _disabled_sync_status():
+    return {'enabled': False, 'has_pending': False, 'needs_attention': False, 'can_sync': False,
+            'sync_progress': {'remaining': 0, 'failed': 0, 'partial': 0, 'active': None}}
+
+
 @bp.get('/status')
 @login_required
 def status():
     if not core.enabled():
-        return jsonify({'enabled': False, 'jobs': [], 'counts': {}, 'stale': False,
-                        'has_pending': False, 'needs_attention': False, 'can_sync': False})
+        return jsonify({'jobs': [], 'counts': {}, 'stale': False, **_disabled_sync_status()})
     return _status()
 
 
@@ -137,12 +141,24 @@ def _status(db):
                     'search_mode': 'structured_text', 'semantic_available': False, **sync_status(db)})
 
 
+@bp.get('/sync')
+@login_required
+def sync_progress():
+    if not core.enabled():
+        return jsonify(_disabled_sync_status())
+    return _sync_progress()
+
+
+@guard
+def _sync_progress(db):
+    return jsonify(sync_status(db))
+
+
 @bp.post('/sync')
 @login_required
 def sync():
     if not core.enabled():
-        return jsonify({'enabled': False, 'has_pending': False, 'needs_attention': False,
-                        'can_sync': False, 'updated': False})
+        return jsonify({'updated': False, **_disabled_sync_status()})
     try:
         data = body() if request.get_data() else {}
         retry = data.get('retry', False)

@@ -46,6 +46,9 @@ function cortexKnowledge() {
         knowledgeZoom: 1,
         knowledgeSyncing: false,
         knowledgeSyncError: '',
+        knowledgeSyncStage: '',
+        knowledgeSyncTotal: 0,
+        knowledgeSyncSnapshot: null,
         knowledgeNewNote: false,
         knowledgeNote: { content: '', classification: 'declaration', subject_entity_id: '', speaker_entity_id: '', entity_ids: [], reason: '' },
         knowledgeEntityForm: null,
@@ -128,6 +131,11 @@ function cortexKnowledge() {
             await this.enterKnowledge();
         },
         async enterKnowledge() {
+            if (!this.knowledgeSyncing) {
+                this.knowledgeSyncStage = '';
+                this.knowledgeSyncTotal = 0;
+                this.knowledgeSyncSnapshot = null;
+            }
             await this.loadKnowledge();
             if (this.knowledgeEnabled && this.knowledgeStatus.has_pending && this.knowledgeStatus.can_sync && this.view === 'knowledge') {
                 void this.syncKnowledge();
@@ -166,9 +174,10 @@ function cortexKnowledge() {
             }
             try {
                 if (!background) {
+                    const previousStatus = this.knowledgeStatus;
                     const status = await this.api('/api/knowledge/status');
                     if (request !== this.knowledgeRequest) return;
-                    this.knowledgeStatus = status;
+                    if (!this.knowledgeSyncing && this.knowledgeStatus === previousStatus) this.knowledgeStatus = status;
                     this.knowledgeEnabled = status.enabled !== false;
                 }
                 if (!this.knowledgeEnabled) return;
@@ -641,24 +650,104 @@ function cortexKnowledge() {
             } catch (error) { this.knowledgeDetailError = error.message; }
             finally { this.knowledgeSaving = false; }
         },
+        knowledgeSyncValue() {
+            const progress = this.knowledgeSyncSnapshot;
+            return progress ? this.knowledgeSyncTotal - progress.remaining - progress.failed + (progress.partial || 0) : 0;
+        },
+        knowledgeSyncQueueLabel() {
+            const remaining = this.knowledgeSyncSnapshot?.remaining;
+            if (remaining === 1) return '1 conversa na fila';
+            if (remaining > 1) return `${remaining} de ${this.knowledgeSyncTotal} conversas ainda na fila`;
+            return 'Nenhuma conversa na fila';
+        },
+        knowledgeSyncMessage() {
+            const stage = this.knowledgeSyncStage;
+            if (this.knowledgeSyncing) {
+                const active = this.knowledgeSyncSnapshot?.active;
+                if (stage === 'refreshing') return 'Carregando as conexões atualizadas…';
+                if (active?.phase === 'publishing') return 'Salvando as conexões na memória…';
+                if (active) return 'Analisando o conteúdo da conversa…';
+                if (stage === 'waiting') return 'Aguardando a próxima tentativa…';
+                if (stage === 'checking') return 'Verificando conversas pendentes…';
+                return 'Preparando a próxima conversa…';
+            }
+            if (this.knowledgeSyncError) return this.knowledgeSyncError;
+            const status = this.knowledgeStatus;
+            if (!status.can_sync && (status.needs_attention || stage === 'partial'))
+                return 'A atualização automática está indisponível.';
+            if (stage === 'partial' || status.needs_attention) return 'Atualização com pendências.';
+            if (stage === 'complete') return this.knowledgeSyncTotal ? 'Memória atualizada.' : 'A memória já está atualizada.';
+            return '';
+        },
+        knowledgeSyncDetail() {
+            const progress = this.knowledgeSyncSnapshot || this.knowledgeStatus.sync_progress;
+            const active = progress?.active;
+            if (this.knowledgeSyncing && active && this.knowledgeSyncStage !== 'refreshing') {
+                const kind = active.kind === 'one_on_one' ? '1:1' : 'Reunião';
+                const title = active.title && active.title !== kind ? active.title : '';
+                const segment = active.phase === 'extracting' && active.segments_total > 1
+                    ? `Trecho ${Math.min(active.segments_completed + 1, active.segments_total)} de ${active.segments_total}` : '';
+                return [kind, title, segment].filter(Boolean).join(' · ');
+            }
+            if (progress?.failed === 1) return '1 conversa precisa de nova tentativa.';
+            if (progress?.failed > 1) return `${progress.failed} conversas precisam de nova tentativa.`;
+            return '';
+        },
+        updateKnowledgeSyncProgress(state) {
+            const progress = state.sync_progress;
+            if (!progress) return;
+            this.knowledgeSyncSnapshot = progress;
+            this.knowledgeSyncTotal = Math.max(this.knowledgeSyncTotal, progress.remaining + progress.failed);
+        },
+        async requestKnowledgeSync(retry) {
+            let inFlight = true;
+            const poll = async () => {
+                if (!inFlight || this.view !== 'knowledge') return;
+                try {
+                    const state = await this.api('/api/knowledge/sync', { cache: 'no-store' });
+                    if (inFlight && this.view === 'knowledge') this.updateKnowledgeSyncProgress(state);
+                } catch { /* The write response remains authoritative if a progress read fails. */ }
+                if (inFlight && this.view === 'knowledge') timer = setTimeout(poll, 1500);
+            };
+            let timer = setTimeout(poll, 800);
+            try {
+                return await this.api('/api/knowledge/sync', {
+                    method: 'POST', body: JSON.stringify(retry ? { retry: true } : {})
+                });
+            } finally {
+                inFlight = false;
+                clearTimeout(timer);
+            }
+        },
         async syncKnowledge(retry = false) {
             if (this.knowledgeSyncing || !this.knowledgeEnabled || this.view !== 'knowledge') return;
             this.knowledgeSyncing = true;
             this.knowledgeSyncError = '';
+            this.knowledgeSyncStage = 'checking';
+            this.knowledgeSyncTotal = 0;
+            this.knowledgeSyncSnapshot = null;
+            this.updateKnowledgeSyncProgress(this.knowledgeStatus);
             let changed = false;
             try {
                 while (this.view === 'knowledge') {
-                    const result = await this.api('/api/knowledge/sync', {
-                        method: 'POST', body: JSON.stringify(retry ? { retry: true } : {})
-                    });
+                    const result = await this.requestKnowledgeSync(retry);
                     retry = false;
                     changed ||= !!result.updated;
                     this.knowledgeStatus = { ...this.knowledgeStatus, ...result };
+                    this.updateKnowledgeSyncProgress(result);
                     if (this.view !== 'knowledge') break;
-                    if (result.updated || !result.has_pending) await this.loadKnowledge(false, true);
-                    if (!result.has_pending || !result.can_sync) break;
+                    if (result.updated || !result.has_pending) {
+                        this.knowledgeSyncStage = 'refreshing';
+                        await this.loadKnowledge(false, true);
+                    }
+                    if (!result.has_pending || !result.can_sync) {
+                        this.knowledgeSyncStage = !result.can_sync || result.needs_attention ? 'partial' : 'complete';
+                        break;
+                    }
+                    this.knowledgeSyncStage = result.retry_after_ms ? 'waiting' : 'preparing';
                     const wait = Number(result.retry_after_ms) || (result.updated ? 250 : 1500);
                     await new Promise(resolve => setTimeout(resolve, Math.min(30000, Math.max(200, wait))));
+                    this.knowledgeSyncStage = 'preparing';
                 }
             } catch {
                 this.knowledgeSyncError = 'Não foi possível atualizar a memória agora.';
