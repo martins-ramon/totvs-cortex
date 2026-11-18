@@ -297,6 +297,11 @@ _EVOLUTION_DDL = [
 ]
 
 
+# Mesmo mecanismo evolutivo usado pelo restante da aplicação.
+from .knowledge_schema import KNOWLEDGE_DDL
+_EVOLUTION_DDL += KNOWLEDGE_DDL
+
+
 def check_database():
     """Verifica conectividade e schema sem DDL nem leitura de dados pessoais.
 
@@ -320,6 +325,14 @@ def check_database():
                      meeting_participants, meeting_actions, assistant_memories
                 WHERE FALSE
             """))
+            if os.environ.get('KNOWLEDGE_ENABLED', 'false').lower() in {'1', 'true', 'yes'}:
+                conn.execute(text('''SELECT knowledge_entities.version,knowledge_sources.current_version_id,
+                    knowledge_versions.fingerprint,knowledge_claims.human_fields,knowledge_claims.condition_text,knowledge_relations.source_key,
+                    knowledge_revisions.previous_version,knowledge_jobs.lease_token,knowledge_outbox.revision_token,
+                    commitments.knowledge_version,meeting_actions.knowledge_created,member_cards.knowledge_revision
+                    FROM knowledge_entities,knowledge_sources,knowledge_versions,knowledge_claims,knowledge_relations,
+                         knowledge_revisions,knowledge_jobs,knowledge_outbox,commitments,meeting_actions,member_cards
+                    WHERE FALSE'''))
         return "ok"
     except Exception as exc:
         sqlstate = getattr(getattr(exc, "orig", exc), "pgcode", None)

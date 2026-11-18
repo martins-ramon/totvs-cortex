@@ -18,13 +18,15 @@ from cortex.assistant_memory import load_memories
 from cortex.database import session_factory
 from cortex.meeting_insights import analysis_stale
 from cortex.transcripts import normalize_transcript
+from cortex import knowledge
+from cortex.knowledge_query import memory_source_context
 
 _CONTEXT_BUDGET = 70_000
 _SOURCE_BUDGET = 3_600
 _CHUNK_SIZE = 1_400
 _CHUNK_OVERLAP = 180
 _MAX_SOURCES = 70
-_SOURCE_ID = re.compile(r"(?<![A-Za-z0-9_])(?:(?:person|one_on_one|commitment|checkpoint|meeting|meeting_action|memory):[1-9][0-9]{0,9}|email:[A-Za-z0-9_-]{1,200})(?![A-Za-z0-9_:-])")
+_SOURCE_ID = re.compile(r"(?<![A-Za-z0-9_])(?:(?:person|one_on_one|commitment|checkpoint|meeting|meeting_action|memory|knowledge|relation):[1-9][0-9]{0,9}|email:[A-Za-z0-9_-]{1,200})(?![A-Za-z0-9_:-])")
 _FOLLOWUP_REFERENCES = set("""
 esse essa esses essas isso isto aquele aquela aqueles aquelas deles delas dele dela
 tabela lista grafico organograma linha linhas item itens primeiro primeira segundo
@@ -150,6 +152,9 @@ def _record(kind, row, person, body, date=None, title=None):
 def _record_people(record):
     """Relevance comes from declared attendance or an explicit action assignment."""
     ids = {record["person_id"]} if record.get("person_id") is not None else set()
+    ids.update(record.get('mentioned_person_ids') or [])
+    if record['type'] in {'knowledge', 'relation'}:
+        ids.update(record.get('participant_ids') or [])
     if record["type"] == "meeting":
         ids.update(record.get("participant_ids") or [])
         ids.update(record.get("assigned_person_ids") or [])
@@ -272,7 +277,7 @@ def _conversation_hints(message, history, records, explicit_person_ids):
     return hints
 
 
-def _load_database():
+def _load_database(include_knowledge=False):
     db = session_factory()
     try:
         people = [dict(row) for row in db.execute(text("""
@@ -285,6 +290,21 @@ def _load_database():
             person["active"] = bool(person["active"])
         by_id = {person["id"]: person for person in people}
         records = []
+        managed, manual_records, memory_unavailable = {}, [], False
+        memory_coverage = {'status': 'disabled'}
+        if knowledge.enabled():
+            try:
+                with db.begin_nested():
+                    snapshot = memory_source_context(db)
+                managed = snapshot.get('sources', {})
+                manual_records = snapshot.get('manual_records', [])
+                memory_coverage = {**snapshot.get('coverage', {}), 'status': 'available',
+                                   'revision_token': snapshot.get('revision_token')}
+            except Exception:
+                # Falha identificável sem recolocar interpretações corrigidas
+                # por meio de resumos ou transcrições do caminho legado.
+                memory_unavailable = True
+                memory_coverage = {'status': 'unavailable', 'partial': True}
         for person in people:
             body = "\n".join(f"{key}: {_string(person.get(key))}" for key in (
                 "full_name", "preferred_name", "email", "role_title", "active", "notes", "transcript_aliases"))
@@ -309,17 +329,23 @@ def _load_database():
                 row = dict(row)
                 person = by_id.get(row["person_id"])
                 corrected_names = False
-                if kind == "one_on_one" and row.get("transcript_raw"):
+                memory_source = managed.get((kind, row['id']))
+                if kind == "one_on_one" and row.get("transcript_raw") and memory_source is None and not memory_unavailable:
                     normalized = normalize_transcript(row["transcript_raw"], people)
                     row["transcript_raw"] = normalized["text"]
                     corrected_names = bool(normalized["corrections"])
                 body = "\n".join(f"{key}: {_string(row.get(key))}" for key in fields if row.get(key) is not None)
                 if corrected_names:
                     body = "Nomes da transcrição corrigidos com as grafias cadastradas; original preservado.\n" + body
+                if kind == 'one_on_one' and (memory_source is not None or memory_unavailable):
+                    body = memory_source.get('text', 'Nenhuma interpretação ativa nesta fonte.') if memory_source is not None else 'Memória temporariamente indisponível; consulte a fonte na tela da reunião.'
                 title = None
                 if kind == "one_on_one" and row.get("title"):
                     title = f"{row['title']} · {(person or {}).get('full_name', '')}"
-                records.append(_record(kind, row, person, body, row.get(date_key), title))
+                record = _record(kind, row, person, body, row.get(date_key), title)
+                if memory_source is not None:
+                    record['mentioned_person_ids'] = memory_source.get('person_ids', [])
+                records.append(record)
         # A collective meeting is one source, regardless of attendee count.
         # This scans the entire raw history as well as current AI analysis.
         participants_by_meeting = defaultdict(list)
@@ -348,12 +374,18 @@ def _load_database():
         """)).mappings():
             row = dict(raw)
             participants = participants_by_meeting[row["id"]]
+            memory_source = managed.get(('meeting', row['id']))
+            excerpt = (_meeting_excerpt(row, participants, people)
+                       if memory_source is None and not memory_unavailable
+                       else memory_source.get('text', 'Nenhuma interpretação ativa nesta fonte.')
+                       if memory_source is not None else 'Memória temporariamente indisponível; consulte a fonte na tela da reunião.')
             records.append({"id": f"meeting:{row['id']}", "type": "meeting",
                             "title": f"Reunião · {row['title']}",
-                            "excerpt": _meeting_excerpt(row, participants, people),
+                            "excerpt": excerpt,
                             "date": _iso(row["occurred_on"]), "person_id": None,
                             "record_id": row["id"], "meeting_id": row["id"],
                             "participant_ids": [p["id"] for p in participants],
+                            "mentioned_person_ids": memory_source.get('person_ids', []) if memory_source is not None else [],
                             "assigned_person_ids": sorted(assignments_by_meeting[row["id"]])})
         for row in actions:
             person = by_id.get(row["person_id"])
@@ -363,7 +395,8 @@ def _load_database():
                             "date": _iso(row["occurred_on"]), "person_id": row["person_id"],
                             "record_id": row["id"], "meeting_id": row["meeting_id"],
                             "participant_ids": []})
-        return people, records
+        records.extend(manual_records)
+        return (people, records, memory_coverage) if include_knowledge else (people, records)
     finally:
         db.close()
 
@@ -431,7 +464,7 @@ def _select(records, terms, matched_ids, budget=_CONTEXT_BUDGET, source_hints=No
         if terms and score == 0 and not person_match and not hinted:
             continue
         item = dict(record)
-        item["_score"] = score + (4 if person_match else 0) + (8 if record["type"] == "memory" else 0) + (100 if hinted else 0)
+        item["_score"] = score + (4 if person_match else 0) + (8 if record["type"] in {"memory", "knowledge"} else 0) + (100 if hinted else 0)
         item["excerpt"], item["excerpt_partial"] = _excerpt(item["excerpt"], terms, weights)
         candidates.append(item)
 
@@ -465,7 +498,15 @@ def _select(records, terms, matched_ids, budget=_CONTEXT_BUDGET, source_hints=No
 def gather_context(user_id, message, history=None):
     """Collect evidence for an authenticated director, safely degrading Gmail."""
     warnings = []
-    people, records = _load_database()
+    knowledge_coverage = None
+    if knowledge.enabled():
+        people, records, knowledge_coverage = _load_database(include_knowledge=True)
+        if knowledge_coverage.get('status') == 'unavailable':
+            warnings.append('A memória estruturada está indisponível. Interpretações antigas foram omitidas; dados operacionais permanecem disponíveis.')
+        elif knowledge_coverage.get('incomplete'):
+            warnings.append('A memória tem fontes pendentes ou com falha. Fontes ainda não processadas usam o histórico original; ausência de uma extração não significa ausência de informação.')
+    else:
+        people, records = _load_database()
     try:
         memories = [_memory_record(row) for row in load_memories(user_id)]
         memory_coverage = {"status": "available", "count": len(memories)}
@@ -553,6 +594,7 @@ def gather_context(user_id, message, history=None):
                              "person_notes_summarized": truncated_notes,
                              "context_chars": chars, "context_char_budget": _CONTEXT_BUDGET},
                 "gmail": mail["coverage"], "memory": memory_coverage,
+                **({'knowledge': knowledge_coverage} if knowledge_coverage is not None else {}),
                 "matched_person_ids": sorted(matched_ids),
                 "ambiguous_person_ids": sorted(ambiguous_ids),
                 "conversation_source_hints": source_hints},

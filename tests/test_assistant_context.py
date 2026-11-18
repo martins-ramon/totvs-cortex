@@ -391,6 +391,32 @@ class AssistantContextTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["gmail"]["status"], "unavailable")
         self.assertNotIn("SUPERSECRET", json.dumps(result))
 
+    def test_structured_curation_replaces_raw_third_party_source_and_tracks_mentions(self):
+        self.meeting(50, 2, '2026-11-12', 'OLDREJECTED: André tem um problema confirmado.',
+                     summary_ai='OLDREJECTED summary')
+        snapshot = {'sources': {('one_on_one', 50): {
+            'text': 'Percepção de Ana sobre capacidade; interpretação corrigida.',
+            'person_ids': [1, 2], 'claims': []}},
+            'manual_records': [], 'revision_token': 'curation-2', 'coverage': {'processed_sources': 1}}
+        with patch.object(context.knowledge, 'enabled', return_value=True), \
+                patch.object(context, 'memory_source_context', return_value=snapshot):
+            result = context.gather_context(7, 'O que mencionaram sobre André Pasold?')
+        source = next(item for item in result['sources'] if item['id'] == 'one_on_one:50')
+        self.assertIn('interpretação corrigida', source['excerpt'])
+        self.assertNotIn('OLDREJECTED', json.dumps(result))
+        self.assertEqual(result['coverage']['knowledge']['revision_token'], 'curation-2')
+
+    def test_structured_memory_failure_omits_old_interpretations_with_explicit_warning(self):
+        self.meeting(50, 1, '2026-11-12', 'OLDREJECTED knowledge that must not reappear.',
+                     summary_ai='OLDREJECTED summary')
+        with patch.object(context.knowledge, 'enabled', return_value=True), \
+                patch.object(context, 'memory_source_context', side_effect=RuntimeError('private DB error')):
+            result = context.gather_context(7, 'André Pasold')
+        self.assertEqual(result['coverage']['knowledge']['status'], 'unavailable')
+        self.assertTrue(any('memória estruturada está indisponível' in warning for warning in result['warnings']))
+        self.assertNotIn('OLDREJECTED', json.dumps(result))
+        self.assertNotIn('private DB error', json.dumps(result))
+
     def test_no_chat_content_is_interpolated_into_sql(self):
         result = context.gather_context(7, "'; DROP TABLE people; --")
         self.assertIsInstance(result["sources"], list)

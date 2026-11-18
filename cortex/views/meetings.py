@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import date
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 from sqlalchemy import bindparam, text
 
 from ..database import session_factory
@@ -12,6 +12,8 @@ from ..meeting_insights import (analysis_stale, decode_json, extract_forum_insig
 from ..meeting_participants import detect_meeting_participants
 from ..meetings_context import iso, load_participants, serialize_action
 from ..security import login_required
+from .. import knowledge
+from ..knowledge_query import record_task_change
 from ..transcripts import load_transcript_people
 
 bp = Blueprint('meetings', __name__, url_prefix='/api')
@@ -217,6 +219,8 @@ def create_meeting():
         keys = list(values)
         mid = db.execute(text(f"INSERT INTO meetings ({', '.join(keys)}) VALUES ({', '.join(':' + k for k in keys)}) RETURNING id"), values).fetchone()[0]
         _replace_participants(db, mid, ids)
+        if knowledge.enabled():
+            knowledge.enqueue_source(db, 'meeting', mid, session.get('user_id'))
         db.commit()
         return jsonify({'success': True, 'meeting_id': mid, 'auto_added_participants': added}), 201
     except ValueError as exc:
@@ -264,6 +268,8 @@ def update_meeting(mid):
         _replace_participants(db, mid, ids)
         sets = [f'{key} = :{key}' for key in values] + ['updated_at = CURRENT_TIMESTAMP']
         db.execute(text(f"UPDATE meetings SET {', '.join(sets)} WHERE id = :mid"), {**values, 'mid': mid})
+        if knowledge.enabled():
+            knowledge.enqueue_source(db, 'meeting', mid, session.get('user_id'))
         db.commit()
         return jsonify({'success': True, 'auto_added_participants': added})
     except ValueError as exc:
@@ -280,6 +286,8 @@ def update_meeting(mid):
 def delete_meeting(mid):
     db = session_factory()
     try:
+        if knowledge.enabled():
+            knowledge.remove_source(db, 'meeting', mid)
         count = db.execute(text('DELETE FROM meetings WHERE id = :mid'), {'mid': mid}).rowcount
         db.commit()
         return (jsonify({'success': True}) if count else
@@ -334,6 +342,8 @@ def extract_meeting(mid):
                    {'mid': mid, 'summary': extraction['summary'],
                     'topics': json.dumps(extraction['topics'], ensure_ascii=False),
                     'extraction': json.dumps(extraction, ensure_ascii=False)})
+        if knowledge.enabled():
+            knowledge.enqueue_source(db, 'meeting', mid, session.get('user_id'))
         db.commit()
         return jsonify({'success': True, 'meeting': _load(db, mid)})
     except Exception as exc:
@@ -406,6 +416,11 @@ def create_action(mid):
         values['meeting_id'] = mid
         row = db.execute(text(f"INSERT INTO meeting_actions ({', '.join(keys)}) VALUES ({', '.join(':' + k for k in keys)}) RETURNING *"), values).mappings().first()
         action = serialize_action(row)
+        if knowledge.enabled():
+            record_task_change(db, 'meeting_action', row['id'], {}, dict(row),
+                               session.get('user_id'), reason='Encaminhamento adotado pelo diretor.')
+            action = serialize_action(db.execute(text('SELECT * FROM meeting_actions WHERE id = :id'),
+                                                 {'id': row['id']}).mappings().first())
         db.commit()
         return jsonify({'success': True, 'action': action}), 201
     except ValueError as exc:
@@ -426,6 +441,15 @@ def update_action(aid):
         return jsonify({'error': str(exc)}), 400
     db = session_factory()
     try:
+        before = None
+        if knowledge.enabled():
+            before = db.execute(text('SELECT * FROM meeting_actions WHERE id = :aid FOR UPDATE'),
+                                {'aid': aid}).mappings().first()
+            if before is None:
+                return jsonify(error='Encaminhamento não encontrado.'), 404
+            expected = request.get_json(silent=True).get('knowledge_version')
+            if type(expected) is not int or expected != before['knowledge_version']:
+                return jsonify(error='O encaminhamento foi alterado. Recarregue antes de salvar.', conflict=True), 409
         if 'owner_name' in values and 'person_id' not in values:
             current = db.execute(text('SELECT person_id, owner_name FROM meeting_actions WHERE id = :aid FOR UPDATE'),
                                  {'aid': aid}).mappings().first()
@@ -442,6 +466,11 @@ def update_action(aid):
         if row is None:
             return jsonify({'error': 'Encaminhamento não encontrado.'}), 404
         action = serialize_action(row)
+        if before is not None:
+            record_task_change(db, 'meeting_action', aid, dict(before), dict(row),
+                               session.get('user_id'), reason=request.get_json(silent=True).get('reason') or '')
+            action = serialize_action(db.execute(text('SELECT * FROM meeting_actions WHERE id = :id'),
+                                                 {'id': aid}).mappings().first())
         db.commit()
         return jsonify({'success': True, 'action': action})
     except ValueError as exc:
@@ -458,6 +487,13 @@ def update_action(aid):
 def delete_action(aid):
     db = session_factory()
     try:
+        if knowledge.enabled():
+            before = db.execute(text('SELECT * FROM meeting_actions WHERE id = :aid FOR UPDATE'),
+                                {'aid': aid}).mappings().first()
+            if before is not None:
+                record_task_change(db, 'meeting_action', aid, dict(before),
+                                   {**dict(before), 'status': 'cancelled'}, session.get('user_id'),
+                                   reason='Encaminhamento excluído pelo diretor.')
         count = db.execute(text('DELETE FROM meeting_actions WHERE id = :aid'), {'aid': aid}).rowcount
         db.commit()
         return (jsonify({'success': True}) if count else

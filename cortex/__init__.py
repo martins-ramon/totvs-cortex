@@ -2,7 +2,7 @@ import os
 import logging
 import secrets
 
-from flask import Flask, send_from_directory, jsonify, request
+from flask import Flask, send_from_directory, jsonify, request, session
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -40,6 +40,22 @@ def create_app():
         if on_vercel and not secret_configured and request.path.startswith('/api/'):
             return jsonify({"error": "SESSION_SECRET não configurada para produção."}), 503
 
+    @app.before_request
+    def restrict_director_workspace():
+        # O domínio legado é um espaço único, sem ACL por reunião. Uma conta
+        # adicional não deve contornar a restrição via uma rota consumidora.
+        # A restrição persiste com a memória desligada para rollback seguro.
+        owner = os.environ.get('KNOWLEDGE_OWNER_USER_ID', '').strip()
+        public_api = {'/api/login', '/api/logout', '/api/current-user', '/api/register'}
+        if (owner and request.path.startswith('/api/')
+                and request.path not in public_api
+                and not request.path.startswith('/api/auth/')
+                and session.get('user_id') is not None):
+            if not owner.isdigit() or int(owner) <= 0:
+                return jsonify({'error': 'Configuração do diretor inválida.'}), 503
+            if session['user_id'] != int(owner):
+                return jsonify({'error': 'Este espaço pertence ao diretor autorizado.'}), 403
+
     @app.after_request
     def prevent_private_response_caching(response):
         if request.path.startswith('/api/') or request.path == '/healthz':
@@ -49,7 +65,7 @@ def create_app():
     CORS(app, supports_credentials=True)
 
     from .views import auth, people
-    from .views import sessions, checkpoints, cards, connections, dashboard, assistant, meetings
+    from .views import sessions, checkpoints, cards, connections, dashboard, assistant, meetings, knowledge
     app.register_blueprint(auth.bp)
     app.register_blueprint(people.bp)
     app.register_blueprint(sessions.bp)
@@ -59,6 +75,7 @@ def create_app():
     app.register_blueprint(dashboard.bp)
     app.register_blueprint(assistant.bp)
     app.register_blueprint(meetings.bp)
+    app.register_blueprint(knowledge.bp)
 
     @app.route('/')
     def index():
@@ -72,6 +89,10 @@ def create_app():
     def connections_page():
         # Página-destino do callback OAuth das integrações (ex.: Gmail).
         # O JS da SPA lê os query params (?connected=.../?error=...) e abre a view.
+        return serve_static('index.html')
+
+    @app.route('/knowledge')
+    def knowledge_page():
         return serve_static('index.html')
 
     def serve_static(filename):

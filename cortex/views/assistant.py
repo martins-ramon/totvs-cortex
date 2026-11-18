@@ -13,6 +13,8 @@ from ..assistant_context import gather_context
 from ..assistant_memory import delete_memory, load_memories, save_memories
 from ..database import session_factory
 from ..security import login_required
+from .. import knowledge
+from ..knowledge_query import knowledge_revision, record_task_change
 
 bp = Blueprint("assistant", __name__, url_prefix="/api/assistant")
 log = logging.getLogger("cortex.assistant")
@@ -89,13 +91,16 @@ def _sign_action(proposal, user_id, context):
             raise ValueError("Combinado ausente das fontes consultadas.")
         db = session_factory()
         try:
-            row = db.execute(text("SELECT person_id, description, status FROM commitments WHERE id = :cid"),
+            version_column = ', knowledge_version' if knowledge.enabled() else ''
+            row = db.execute(text(f"SELECT person_id, description, status {version_column} FROM commitments WHERE id = :cid"),
                              {"cid": cid}).fetchone()
         finally:
             db.close()
         if not row or row[2] != "open":
             raise ValueError("O combinado já não está em aberto.")
         payload.update(commitment_id=cid, person_id=row[0], expected_description=row[1])
+        if knowledge.enabled():
+            payload['knowledge_version'] = row[3]
         label, details = "Concluir combinado", row[1]
     else:
         raise ValueError("Ação não disponível.")
@@ -110,6 +115,13 @@ def chat():
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     try:
+        revision_token = None
+        if knowledge.enabled():
+            db = session_factory()
+            try:
+                revision_token = knowledge_revision(db)
+            finally:
+                db.close()
         context = gather_context(session["user_id"], message, history)
     except Exception as exc:
         log.warning("Contexto do assistente indisponível (%s).", type(exc).__name__)
@@ -124,6 +136,13 @@ def chat():
         log.warning("Falha na resposta do assistente (%s).", type(exc).__name__)
         return jsonify(error="Não foi possível gerar uma resposta agora. Tente novamente."), 502
     actions, warnings = [], list(context.get("warnings", []))
+    if revision_token is not None:
+        db = session_factory()
+        try:
+            if knowledge_revision(db) != revision_token:
+                return jsonify(error='A memória mudou durante a resposta. Faça a consulta novamente.', conflict=True), 409
+        finally:
+            db.close()
     for proposal in reply.pop("action_proposals"):
         try:
             actions.append(_sign_action(proposal, session["user_id"], context))
@@ -212,21 +231,36 @@ def execute_action():
             if not row:
                 row = db.execute(text("SELECT id FROM commitments WHERE assistant_request_id = :request_id"),
                                  {"request_id": payload["nonce"]}).fetchone()
+            elif knowledge.enabled():
+                after = db.execute(text('SELECT * FROM commitments WHERE id = :cid'),
+                                   {'cid': row[0]}).mappings().first()
+                record_task_change(db, 'commitment', row[0], {}, dict(after), session['user_id'],
+                                   reason='Combinado confirmado pelo diretor no assistente.')
             result = {"message": "Combinado criado.", "commitment_id": row[0], "person_id": payload["person_id"]}
         else:
             params = {"cid": payload["commitment_id"]}
-            row = db.execute(text("""
-                SELECT person_id, description, status FROM commitments WHERE id = :cid FOR UPDATE
+            version_column = ', knowledge_version' if knowledge.enabled() else ''
+            row = db.execute(text(f"""
+                SELECT person_id, description, status {version_column} FROM commitments WHERE id = :cid FOR UPDATE
             """), params).fetchone()
             if not row:
                 return jsonify(error="O combinado já não existe."), 404
             if row[0] != payload["person_id"] or row[1] != payload["expected_description"] or row[2] == "cancelled":
                 return jsonify(error="O combinado mudou desde a proposta. Faça o pedido novamente."), 409
+            if knowledge.enabled() and row[2] != 'done' and payload.get('knowledge_version') != row[3]:
+                return jsonify(error='O combinado mudou desde a proposta. Faça o pedido novamente.', conflict=True), 409
             if row[2] != "done":
+                before = None
+                if knowledge.enabled():
+                    before = db.execute(text('SELECT * FROM commitments WHERE id = :cid'), params).mappings().first()
                 db.execute(text("""
                     UPDATE commitments SET status = 'done', closed_at = CURRENT_TIMESTAMP,
                         updated_at = CURRENT_TIMESTAMP WHERE id = :cid
                 """), params)
+                if before is not None:
+                    after = db.execute(text('SELECT * FROM commitments WHERE id = :cid'), params).mappings().first()
+                    record_task_change(db, 'commitment', params['cid'], dict(before), dict(after),
+                                       session['user_id'], reason='Conclusão confirmada pelo diretor no assistente.')
             result = {"message": "Combinado concluído.", "commitment_id": payload["commitment_id"], "person_id": row[0]}
         db.commit()
         return jsonify(result)

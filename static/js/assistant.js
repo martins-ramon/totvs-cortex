@@ -356,7 +356,7 @@ function cortexAssistant() {
         },
 
         assistantSourceName(type) {
-            return ({ transcript: 'Transcrição', one_on_one: '1:1', session: '1:1', commitment: 'Combinado', checkpoint: 'Checkpoint', email: 'E-mail', gmail: 'Gmail', person: 'Pessoa', card: 'Card do time', member_card: 'Card do time', meeting: 'Reunião de fórum', meeting_action: 'Ação de reunião', memory: 'Memória' })[type] || 'Registro';
+            return ({ transcript: 'Transcrição', one_on_one: '1:1', session: '1:1', commitment: 'Combinado', checkpoint: 'Checkpoint', email: 'E-mail', gmail: 'Gmail', person: 'Pessoa', card: 'Card do time', member_card: 'Card do time', meeting: 'Reunião de fórum', meeting_action: 'Ação de reunião', memory: 'Memória', knowledge: 'Memória curada', relation: 'Relação curada' })[type] || 'Registro';
         },
 
         assistantSourceDate(value) {
@@ -397,7 +397,7 @@ function cortexAssistant() {
         assistantCoverage(coverage) {
             const entries = [];
             const labels = { people: 'pessoas', transcripts: 'transcrições', sessions: '1:1s', one_on_ones: '1:1s', commitments: 'combinados', checkpoints: 'checkpoints', emails: 'e-mails', cards: 'cards' };
-            const sourceLabels = { person: 'pessoas', one_on_one: '1:1s', transcript: 'transcrições', commitment: 'combinados', checkpoint: 'checkpoints', meeting: 'reuniões de fóruns', meeting_action: 'ações de reuniões', card: 'cards', member_card: 'cards', memory: 'memórias' };
+            const sourceLabels = { person: 'pessoas', one_on_one: '1:1s', transcript: 'transcrições', commitment: 'combinados', checkpoint: 'checkpoints', meeting: 'reuniões de fóruns', meeting_action: 'ações de reuniões', card: 'cards', member_card: 'cards', memory: 'memórias', knowledge: 'registros curados', relation: 'relações curadas' };
             const selected = coverage.database?.selected_by_type;
             if (selected && typeof selected === 'object') {
                 Object.entries(sourceLabels).forEach(([key, label]) => {

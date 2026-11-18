@@ -263,6 +263,7 @@ function cortexMeetings() {
             if (!this.meetingDetail || !this.meetingActionForm || this.meetingActionSaving) return;
             const action = this.meetingActionForm;
             const payload = this.meetingActionPayload(action);
+            if (action.knowledge_version != null) payload.knowledge_version = action.knowledge_version;
             if (!payload.description) { this.meetingActionError = 'Informe a descrição da ação.'; return; }
             this.meetingActionSaving = true;
             this.meetingActionError = '';
@@ -285,7 +286,7 @@ function cortexMeetings() {
             this.meetingActionBusy = `status-${action.id}`;
             this.meetingActionError = '';
             try {
-                const data = await this.api(`/api/meeting-actions/${action.id}`, { method: 'PUT', body: JSON.stringify({ status }) });
+                const data = await this.api(`/api/meeting-actions/${action.id}`, { method: 'PUT', body: JSON.stringify({ status, ...(action.knowledge_version == null ? {} : { knowledge_version: action.knowledge_version }) }) });
                 if (this.meetingDetail) this.meetingDetail.actions = this.meetingDetail.actions.map(item => item.id === action.id ? data.action : item);
                 this.refreshMeetingViews();
             } catch (error) {

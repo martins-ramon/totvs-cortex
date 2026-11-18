@@ -9,6 +9,7 @@ Cada passo é uma requisição curta — robusto no Autoscale do Replit (sem
 workers persistentes) e com progresso real na barra do frontend.
 """
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, request, jsonify, session
@@ -18,10 +19,13 @@ from ..database import session_factory
 from .. import ai
 from .. import gmail as gmail_svc
 from ..security import login_required
+from .. import knowledge
+from ..knowledge_query import format_context, knowledge_revision, context_snapshot
 from ..meetings_context import format_meeting_context
 from .sessions import _collect_prep_data, _PERSON_FOR_PREP
 
 bp = Blueprint("cards", __name__, url_prefix="/api")
+log = logging.getLogger('cortex.cards')
 
 _VALID_HEALTH = {"verde", "amarelo", "vermelho"}
 _VALID_TREND = {"subindo", "estavel", "caindo"}
@@ -47,7 +51,7 @@ def _set_job_progress(job_id, payload):
         db.commit()
     except Exception as e:
         db.rollback()
-        print(f"Aviso: falha ao gravar progresso do job {job_id}: {e}")
+        log.warning('Falha ao registrar progresso de cards (%s).', type(e).__name__)
     finally:
         db.close()
 
@@ -56,6 +60,8 @@ def _build_context(prep, email_scan=None):
     """Monta o contexto textual para a IA a partir dos dados consolidados."""
     person = prep['person']
     lines = [f"Pessoa: {person['full_name']}"]
+    if 'knowledge' in prep:
+        lines.append(format_context(prep['knowledge']))
     if person.get('role_title'):
         lines.append(f"Cargo: {person['role_title']}")
     if person.get('email'):
@@ -64,6 +70,9 @@ def _build_context(prep, email_scan=None):
     lines.append(f"Dias desde o último 1:1: "
                  f"{st['days_since_last'] if st['days_since_last'] is not None else 'sem registro'}")
     lines.append(f"Combinados em aberto: {st['open_count']} (vencidos: {st['overdue_count']})")
+    for commitment in prep.get('commitments', []):
+        lines.append(f"Combinado commitment:{commitment['id']}: {commitment['description']} "
+                     f"| responsável: {commitment['owner']} | prazo atual: {commitment.get('due_date') or 'a definir'}")
     if st.get('sentiment_trend'):
         lines.append(f"Tendência de sentimento nas conversas: {st['sentiment_trend']}")
 
@@ -192,11 +201,16 @@ def latest_person_card(person_id):
         """), {"pid": person_id}).fetchone()
         if not row:
             return jsonify({"card": None})
+        cj = row[0] if isinstance(row[0], dict) else {}
+        memory_stale = knowledge.enabled() and (
+            cj.get('knowledge', {}).get('revision_token') != knowledge_revision(db)
+            or cj.get('memory_stale', False))
         return jsonify({"card": {
-            "card_json": row[0] if isinstance(row[0], dict) else {},
+            "card_json": cj,
             "generated_at": row[1].isoformat(),
             "valid_until": row[2].isoformat() if row[2] else None,
-            "stale": bool(row[2] and row[2] < date.today()),
+            "stale": bool(row[2] and row[2] < date.today()) or memory_stale,
+            **({'knowledge_stale': memory_stale} if knowledge.enabled() else {}),
         }})
     finally:
         db.close()
@@ -215,12 +229,17 @@ def all_latest_cards():
             ORDER BY person_id, generated_at DESC
         """)).fetchall()
         cards = {}
+        revision = knowledge_revision(db) if knowledge.enabled() else None
         for pid, cj, gen, val in rows:
+            cj = cj if isinstance(cj, dict) else {}
+            memory_stale = knowledge.enabled() and (
+                cj.get('knowledge', {}).get('revision_token') != revision or cj.get('memory_stale', False))
             cards[str(pid)] = {
-                "card_json": cj if isinstance(cj, dict) else {},
+                "card_json": cj,
                 "generated_at": gen.isoformat(),
                 "valid_until": val.isoformat() if val else None,
-                "stale": bool(val and val < date.today()),
+                "stale": bool(val and val < date.today()) or memory_stale,
+                **({'knowledge_stale': memory_stale} if knowledge.enabled() else {}),
             }
         return jsonify({"cards": cards})
     finally:
@@ -256,7 +275,8 @@ def generate_start():
         })
     except Exception as e:
         db.rollback()
-        return jsonify({"error": str(e)}), 500
+        log.warning('Falha ao iniciar cards (%s).', type(e).__name__)
+        return jsonify(error='Não foi possível iniciar a geração dos cards.'), 500
     finally:
         db.close()
 
@@ -320,6 +340,8 @@ def generate_person_card(person_id):
         })
 
         prep = _collect_prep_data(db, person)
+        outbox_through = db.execute(text("SELECT COALESCE(MAX(id),0) FROM knowledge_outbox WHERE person_id=:pid"),
+                                    {'pid': person_id}).scalar() if knowledge.enabled() else None
         n_sessions = len(prep['recent_sessions'])
         n_cp = 1 if prep.get('last_checkpoint') else 0
         detail_sessions = (
@@ -379,17 +401,38 @@ def generate_person_card(person_id):
             "emails": _email_block(raw, email_scan),
             "ai": analysis,
         }
+        if knowledge.enabled():
+            memory = prep.get('knowledge') or {}
+            token = memory.get('revision_token')
+            if token is not None and token != knowledge_revision(db):
+                db.rollback()
+                return jsonify(error='A memória mudou durante a geração. Gere o card novamente.', conflict=True), 409
+            if token is None:
+                db.rollback()
+                return jsonify(error='A memória está indisponível. Tente gerar o card novamente.'), 503
+            card_json['knowledge'] = {
+                'revision_token': token,
+                'claim_ids': context_snapshot(memory)['used_claim_ids'],
+                'coverage': memory.get('coverage', {}),
+            }
         valid_until = date.today() + timedelta(days=7)
 
-        db.execute(text("""
-            INSERT INTO member_cards (person_id, job_id, card_json, valid_until)
-            VALUES (:pid, :jid, CAST(:cj AS jsonb), :val)
+        revision_column = ', knowledge_revision' if knowledge.enabled() else ''
+        revision_value = ', :knowledge_revision' if knowledge.enabled() else ''
+        db.execute(text(f"""
+            INSERT INTO member_cards (person_id, job_id, card_json, valid_until {revision_column})
+            VALUES (:pid, :jid, CAST(:cj AS jsonb), :val {revision_value})
         """), {
             "pid": person_id,
             "jid": job_id,
             "cj": json.dumps(card_json),
             "val": valid_until,
+            'knowledge_revision': card_json.get('knowledge', {}).get('revision_token'),
         })
+        if outbox_through is not None:
+            db.execute(text("""UPDATE knowledge_outbox SET status='done',updated_at=CURRENT_TIMESTAMP
+                WHERE person_id=:pid AND status='pending' AND id<=:through"""),
+                       {'pid': person_id, 'through': outbox_through})
 
         if job_id:
             db.execute(text("""
@@ -413,13 +456,13 @@ def generate_person_card(person_id):
             try:
                 db2 = session_factory()
                 db2.execute(text("UPDATE card_jobs SET error = :e WHERE id = :jid"),
-                            {"e": f"erro ao gerar card da pessoa {person_id}: {e}", "jid": job_id})
+                            {"e": f"Falha ao gerar card da pessoa {person_id}.", "jid": job_id})
                 db2.commit()
                 db2.close()
             except Exception:
                 pass
-        print(f"Erro ao gerar card da pessoa {person_id}: {e}")
-        return jsonify({"error": f"Falha ao gerar card: {e}"}), 500
+        log.warning('Falha ao gerar card (%s).', type(e).__name__)
+        return jsonify(error='Não foi possível gerar o card. Tente novamente.'), 500
     finally:
         db.close()
 

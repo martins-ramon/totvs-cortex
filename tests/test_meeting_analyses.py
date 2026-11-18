@@ -21,7 +21,8 @@ class MeetingAnalysisTests(unittest.TestCase):
             """CREATE TABLE people (id INTEGER PRIMARY KEY, full_name TEXT, preferred_name TEXT,
                email TEXT, role_title TEXT, active BOOLEAN, hired_at TEXT, notes TEXT, photo TEXT)""",
             """CREATE TABLE commitments (id INTEGER PRIMARY KEY, person_id INTEGER, description TEXT,
-               owner TEXT, due_date TEXT, status TEXT, one_on_one_id INTEGER)""",
+               owner TEXT, due_date TEXT, status TEXT, one_on_one_id INTEGER,
+               knowledge_version INTEGER DEFAULT 1)""",
             """CREATE TABLE one_on_ones (id INTEGER PRIMARY KEY, person_id INTEGER, occurred_on TEXT,
                title TEXT, source TEXT, transcript_raw TEXT, summary_ai TEXT, private_notes TEXT,
                public_notes TEXT, sentiment TEXT, topics TEXT, extraction_json TEXT)""",
@@ -141,6 +142,54 @@ class MeetingAnalysisTests(unittest.TestCase):
         self.assertEqual(result["sources"][0]["meeting_id"], 10)
         self.assertEqual(result["sources"][0]["participant_ids"], [2])
         self.assertNotIn("private_internal_key", result["sources"][0])
+
+    def test_curated_memory_replaces_processed_forum_interpretation_in_card_context(self):
+        memory = {
+            'claims': [{'id': 91, 'classification': 'perception', 'content': 'Marina percebe sobrecarga de André.',
+                        'speaker_entity_id': 2, 'subject_entity_id': 1, 'due_date': '2026-11-26',
+                        'review_state': 'corrected', 'source_ref': 'meeting:10'}],
+            'meeting_actions': [], 'commitments': [], 'revision_token': 'review-2',
+            'coverage': {'processed_sources': [{'kind': 'meeting', 'record_id': 10}]},
+        }
+        with patch.object(sessions.knowledge, 'enabled', return_value=True), \
+                patch.object(sessions, 'recover', return_value=memory):
+            prep = self.prep(1)
+            context = cards._build_context(prep)
+        self.assertIn('Marina percebe sobrecarga', context)
+        self.assertIn('2026-11-26', context)
+        self.assertIn('perception', context)
+        self.assertNotIn('Evidência atual sobre capacidade', context)
+        self.assertNotIn('OUTDATEDSECRET', context)
+
+    def test_rejected_memory_is_not_reintroduced_through_original_forum_excerpt(self):
+        memory = {'claims': [], 'revision_token': 'review-3',
+                  'coverage': {'processed_sources': [{'kind': 'meeting', 'record_id': 10}]}}
+        with patch.object(sessions.knowledge, 'enabled', return_value=True), \
+                patch.object(sessions, 'recover', return_value=memory):
+            context = cards._build_context(self.prep(1))
+        self.assertNotIn('Evidência atual sobre capacidade', context)
+        self.assertNotIn('OUTDATEDSECRET', context)
+        # A tarefa canônica continua independente da interpretação rejeitada.
+        self.assertIn('Revisar dependências de plataforma', context)
+
+    def test_agenda_reports_revision_conflict_when_memory_changes_during_ai(self):
+        app = Flask(__name__)
+        app.config['SECRET_KEY'] = 'test'
+        app.register_blueprint(sessions.bp)
+        client = app.test_client()
+        with client.session_transaction() as auth:
+            auth['user_id'] = 1
+        memory = {'claims': [], 'revision_token': 'before', 'coverage': {'processed_sources': []}}
+        with patch.object(sessions.knowledge, 'enabled', return_value=True), \
+                patch.object(sessions, 'recover', return_value=memory), \
+                patch.object(sessions, 'knowledge_revision', return_value='after'), \
+                patch.object(sessions, 'session_factory', side_effect=self.factory), \
+                patch.object(sessions, '_collect_email_insights', return_value={}), \
+                patch.object(sessions.ai, 'generate_prep_agenda', return_value='Pauta superada'):
+            response = client.post('/api/people/1/agenda')
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue(response.json['conflict'])
+        self.assertNotIn('agenda_md', response.json)
 
 
 if __name__ == "__main__":

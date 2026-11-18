@@ -76,11 +76,30 @@ class SessionTranscriptTests(unittest.TestCase):
         self.assertEqual(persisted['fingerprint'], record['transcript_normalization']['fingerprint'])
         self.assertEqual(persisted['corrections'], record['transcript_normalization']['corrections'])
         self.assertNotIn('text', persisted)
-        # A reextração continua preservando combinados finalizados.
-        self.assertIn("status = 'open'", str(db.execute.call_args_list[3].args[0]))
+        # A reextração consulta a identidade existente sem apagar tarefas.
+        task_lookup = str(db.execute.call_args_list[3].args[0])
+        self.assertIn('SELECT id FROM commitments', task_lookup)
+        self.assertIn('description = :descr', task_lookup)
+        self.assertFalse(any('DELETE FROM commitments' in str(call.args[0]) for call in db.execute.call_args_list))
         db.commit.assert_called_once_with()
         db.rollback.assert_not_called()
         db.close.assert_called_once_with()
+
+    def test_disabled_memory_reextraction_preserves_existing_task_identity_and_human_state(self):
+        db = db_results((meeting(), []), (None, PEOPLE), (None, []), ((99,), []),
+                        (meeting(extraction={'resumo': 'Reanálise'}), []))
+        raw_ai = {'resumo': 'Reanálise', 'combinados': [
+            {'descricao': 'Proposta existente', 'responsavel': 'liderado', 'prazo': '2026-11-20'}]}
+        with patch.object(sessions.knowledge, 'enabled', return_value=False), \
+                patch.object(sessions, 'session_factory', return_value=db), \
+                patch.object(sessions.ai, 'extract_meeting_insights', return_value=raw_ai):
+            response = self.client.post('/api/oneonones/51/extract')
+        self.assertEqual(response.status_code, 200)
+        statements = [str(call.args[0]).strip() for call in db.execute.call_args_list]
+        self.assertFalse(any(sql.startswith(('INSERT INTO commitments', 'UPDATE commitments', 'DELETE FROM commitments'))
+                             for sql in statements))
+        self.assertEqual(db.execute.call_args_list[3].args[1]['descr'], 'Proposta existente')
+        db.commit.assert_called_once_with()
 
     def test_dictionary_change_marks_analyzed_meeting_as_outdated(self):
         previous = normalize_transcript(RAW, [])

@@ -7,6 +7,7 @@ let _dashCharts = {};
 function cortexApp() {
     return {
         ...cortexMeetings(),
+        ...cortexKnowledge(),
         // --- estado ---
         booted: false,
         user: null,
@@ -97,6 +98,7 @@ function cortexApp() {
             }
             // Mensagens de retorno das conexões (OAuth redirect)
             const q = new URLSearchParams(window.location.search);
+            if (window.location.pathname === '/knowledge') this.view = 'knowledge';
             if (['gmail', 'calendar'].includes(q.get('connected'))) {
                 const name = q.get('connected') === 'calendar' ? 'Google Agenda' : 'Gmail';
                 showToast(`${name} conectado com sucesso! ✓`, 'success');
@@ -122,6 +124,7 @@ function cortexApp() {
             this.loadRecentSessions();
             this.loadDashboard();
             if (this.view === 'connections') this.loadConnections();
+            if (this.view === 'knowledge') this.loadKnowledge();
             this.booted = true;
         },
 
@@ -867,9 +870,10 @@ function cortexApp() {
             const prev = c.status;
             c.status = status;
             try {
-                await this.api('/api/commitments/' + c.id, {
-                    method: 'PUT', body: JSON.stringify({ status })
+                const result = await this.api('/api/commitments/' + c.id, {
+                    method: 'PUT', body: JSON.stringify({ status, knowledge_version: c.knowledge_version || c.version })
                 });
+                if (result.knowledge_version) c.knowledge_version = result.knowledge_version;
                 if (status !== 'open') this._dropPrepCommitment(c.id);
             } catch (e) {
                 c.status = prev;
@@ -878,13 +882,14 @@ function cortexApp() {
         },
         async completeFromPrep(c) {
             try {
-                await this.api('/api/commitments/' + c.id, {
-                    method: 'PUT', body: JSON.stringify({ status: 'done' })
+                const result = await this.api('/api/commitments/' + c.id, {
+                    method: 'PUT', body: JSON.stringify({ status: 'done', knowledge_version: c.knowledge_version || c.version })
                 });
+                if (result.knowledge_version) c.knowledge_version = result.knowledge_version;
                 c.status = 'done';
                 this._dropPrepCommitment(c.id);
                 const local = this.personCommitments.find(x => x.id === c.id);
-                if (local) local.status = 'done';
+                if (local) { local.status = 'done'; if (result.knowledge_version) local.knowledge_version = result.knowledge_version; }
                 showToast('Combinado concluído! ✓', 'success');
             } catch (e) {
                 showToast(e.message, 'error');

@@ -1,5 +1,6 @@
 """Núcleo 1:1 (novo modelo): sessões, extração IA e preparação de reuniões."""
 import json
+import logging
 from datetime import date
 
 from flask import Blueprint, request, jsonify, session
@@ -9,11 +10,14 @@ from ..database import session_factory
 from .. import ai
 from .. import gmail as gmail_svc
 from ..security import login_required
+from .. import knowledge
+from ..knowledge_query import recover, format_context, knowledge_revision, record_task_change
 from ..meetings_context import load_meeting_context, format_meeting_context
 from ..transcripts import (load_transcript_people, normalize_transcript,
                            normalization_metadata, transcript_preview)
 
 bp = Blueprint("sessions", __name__, url_prefix="/api")
+log = logging.getLogger('cortex.sessions')
 
 _VALID_SENTIMENTS = {"positivo", "neutro", "preocupante"}
 _VALID_OWNERS = {"manager", "person"}
@@ -123,6 +127,8 @@ def create_session():
             "pubnotes": data.get('public_notes') or None,
         })
         session_id = result.fetchone()[0]
+        if knowledge.enabled():
+            knowledge.enqueue_source(db, 'one_on_one', session_id, session.get('user_id'))
         db.commit()
         return jsonify({"success": True, "session_id": session_id}), 201
     except ValueError as e:
@@ -188,6 +194,8 @@ def update_session(session_id):
         result = db.execute(
             text(f"UPDATE one_on_ones SET {', '.join(updates)} WHERE id = :sid"),
             params)
+        if result.rowcount and knowledge.enabled():
+            knowledge.enqueue_source(db, 'one_on_one', session_id, session.get('user_id'))
         db.commit()
         if result.rowcount == 0:
             return jsonify({"error": "Sessão não encontrada"}), 404
@@ -197,7 +205,8 @@ def update_session(session_id):
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         db.rollback()
-        return jsonify({"error": str(e)}), 500
+        log.warning('Falha ao atualizar sessão (%s).', type(e).__name__)
+        return jsonify(error='Não foi possível atualizar a sessão.'), 500
     finally:
         db.close()
 
@@ -207,6 +216,8 @@ def update_session(session_id):
 def delete_session(session_id):
     db = session_factory()
     try:
+        if knowledge.enabled():
+            knowledge.remove_source(db, 'one_on_one', session_id)
         # Combinados vinculados ficam órfãos com one_on_one_id NULL (FK SET NULL)
         result = db.execute(
             text("DELETE FROM one_on_ones WHERE id = :sid"), {"sid": session_id})
@@ -216,7 +227,8 @@ def delete_session(session_id):
         return jsonify({"success": True})
     except Exception as e:
         db.rollback()
-        return jsonify({"error": str(e)}), 500
+        log.warning('Falha ao excluir sessão (%s).', type(e).__name__)
+        return jsonify(error='Não foi possível excluir a sessão.'), 500
     finally:
         db.close()
 
@@ -282,6 +294,13 @@ def extract_session(session_id):
         ext = _normalize_extraction(raw)
         ext['transcript_normalization'] = normalization_metadata(normalized)
 
+        if knowledge.enabled():
+            current = db.execute(text(_SESSION_SELECT + ' WHERE id = :sid FOR UPDATE'),
+                                 {'sid': session_id}).fetchone()
+            if current is None or tuple(current[i] for i in (1, 2, 5, 7, 8)) != tuple(row[i] for i in (1, 2, 5, 7, 8)):
+                db.rollback()
+                return jsonify(error='A sessão foi alterada durante a análise. Execute novamente.'), 409
+
         db.execute(text("""
             UPDATE one_on_ones
             SET summary_ai = :resumo, sentiment = :sent, topics = CAST(:topics AS jsonb),
@@ -295,23 +314,28 @@ def extract_session(session_id):
             "sid": session_id,
         })
 
-        # Sincroniza combinados: substitui os ainda abertos desta sessão;
-        # preserva os já concluídos/cancelados pelo usuário.
-        db.execute(text("""
-            DELETE FROM commitments
-            WHERE one_on_one_id = :sid AND status = 'open'
-        """), {"sid": session_id})
-        for c in ext["combinados"]:
-            db.execute(text("""
-                INSERT INTO commitments (one_on_one_id, person_id, description, owner, due_date)
-                VALUES (:sid, :pid, :descr, :owner, :due)
-            """), {
-                "sid": session_id,
-                "pid": row[1],
-                "descr": c["descricao"],
-                "owner": c["responsavel"],
-                "due": c["prazo"],
-            })
+        if knowledge.enabled():
+            # A memória reconcilia apenas compromissos aceitos com evidência.
+            # IDs e alterações humanas sobrevivem à reanálise da transcrição.
+            knowledge.enqueue_source(db, 'one_on_one', session_id, session.get('user_id'))
+        else:
+            for c in ext["combinados"]:
+                # Desligar a memória não pode apagar IDs, prazos ou estados
+                # curados. O UPDATE da sessão acima serializa estas consultas
+                # por fonte, impedindo duas extrações de inserir a mesma tarefa.
+                params = {"sid": session_id, "pid": row[1], "descr": c["descricao"],
+                          "owner": c["responsavel"], "due": c["prazo"]}
+                existing = db.execute(text("""
+                    SELECT id FROM commitments WHERE one_on_one_id = :sid
+                        AND person_id = :pid AND description = :descr AND owner = :owner
+                    ORDER BY id LIMIT 1
+                """), params).fetchone()
+                if existing is not None:
+                    continue
+                db.execute(text("""
+                    INSERT INTO commitments (one_on_one_id, person_id, description, owner, due_date)
+                    VALUES (:sid, :pid, :descr, :owner, :due)
+                """), params)
         db.commit()
 
         updated = db.execute(text(_SESSION_SELECT + " WHERE id = :sid"),
@@ -323,8 +347,8 @@ def extract_session(session_id):
         return jsonify({"success": True, "session": result})
     except Exception as e:
         db.rollback()
-        print(f"Erro na extração IA da sessão {session_id}: {e}")
-        return jsonify({"error": f"Falha ao extrair insights: {e}"}), 500
+        log.warning('Falha na extração de sessão (%s).', type(e).__name__)
+        return jsonify(error='Não foi possível extrair os insights. A fonte foi preservada.'), 500
     finally:
         db.close()
 
@@ -336,9 +360,10 @@ def extract_session(session_id):
 def list_person_commitments(person_id):
     db = session_factory()
     try:
-        rows = db.execute(text("""
+        version_column = ", c.knowledge_version, EXISTS(SELECT 1 FROM knowledge_claims kc WHERE kc.commitment_id=c.id AND kc.active AND kc.conflict ? 'task_evidence_removed')" if knowledge.enabled() else ''
+        rows = db.execute(text(f"""
             SELECT c.id, c.one_on_one_id, c.description, c.owner, c.due_date,
-                   c.status, c.closed_at
+                   c.status, c.closed_at {version_column}
             FROM commitments c
             WHERE c.person_id = :pid
             ORDER BY CASE c.status WHEN 'open' THEN 0 ELSE 1 END,
@@ -350,6 +375,7 @@ def list_person_commitments(person_id):
             "due_date": r[4].isoformat() if r[4] else None,
             "status": r[5], "is_overdue": bool(r[4] and r[4] < date.today()),
             "closed_at": r[6].isoformat() if r[6] else None,
+            **({'knowledge_version': r[7], 'support_warning': bool(r[8])} if knowledge.enabled() else {}),
         } for r in rows]})
     finally:
         db.close()
@@ -393,19 +419,37 @@ def update_commitment(commitment_id):
 
     db = session_factory()
     try:
+        before = None
+        if knowledge.enabled():
+            before = db.execute(text('SELECT * FROM commitments WHERE id = :cid FOR UPDATE'),
+                                {'cid': commitment_id}).mappings().first()
+            if before is None:
+                return jsonify(error='Combinado não encontrado'), 404
+            expected = data.get('knowledge_version')
+            if type(expected) is not int or expected != before['knowledge_version']:
+                return jsonify(error='O combinado foi alterado. Recarregue antes de salvar.', conflict=True), 409
         result = db.execute(
             text(f"UPDATE commitments SET {', '.join(updates)} WHERE id = :cid"),
             params)
+        if before is not None:
+            after = db.execute(text('SELECT * FROM commitments WHERE id = :cid'),
+                               {'cid': commitment_id}).mappings().first()
+            record_task_change(db, 'commitment', commitment_id, dict(before), dict(after),
+                               session.get('user_id'), reason=data.get('reason') or '')
+            updated_version = db.execute(text('SELECT knowledge_version FROM commitments WHERE id = :cid'),
+                                         {'cid': commitment_id}).scalar()
         db.commit()
         if result.rowcount == 0:
             return jsonify({"error": "Combinado não encontrado"}), 404
-        return jsonify({"success": True})
+        return jsonify({"success": True, **({'knowledge_version': updated_version}
+                                            if before is not None else {})})
     except ValueError as e:
         db.rollback()
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         db.rollback()
-        return jsonify({"error": str(e)}), 500
+        log.warning('Falha ao atualizar combinado (%s).', type(e).__name__)
+        return jsonify(error='Não foi possível atualizar o combinado.'), 500
     finally:
         db.close()
 
@@ -419,8 +463,9 @@ def _collect_prep_data(db, person_row):
     person_id = person_row[0]
 
     commitments = []
-    for r in db.execute(text("""
-            SELECT id, description, owner, due_date, status, one_on_one_id
+    version_column = ', knowledge_version' if knowledge.enabled() else ''
+    for r in db.execute(text(f"""
+            SELECT id, description, owner, due_date, status, one_on_one_id {version_column}
             FROM commitments
             WHERE person_id = :pid AND status = 'open'
             ORDER BY due_date NULLS LAST, id
@@ -430,6 +475,7 @@ def _collect_prep_data(db, person_row):
             "due_date": r[3].isoformat() if r[3] else None,
             "is_overdue": bool(r[3] and r[3] < date.today()),
             "one_on_one_id": r[5],
+            **({'knowledge_version': r[6]} if knowledge.enabled() else {}),
         })
 
     sessions = []
@@ -492,7 +538,37 @@ def _collect_prep_data(db, person_row):
             trend = "estável"
     stats["sentiment_trend"] = trend
 
-    return {
+    memory = None
+    if knowledge.enabled():
+        # Savepoint permite sinalizar schema/serviço temporariamente indisponível
+        # sem abortar a leitura do restante do perfil.
+        try:
+            with db.begin_nested():
+                memory = recover(db, person_id=person_id)
+        except Exception:
+            memory = {'claims': [], 'coverage': {'status': 'unavailable', 'partial': True},
+                      'warning': 'Memória indisponível; dados operacionais permanecem disponíveis.'}
+        processed = {(item['kind'], item['record_id'])
+                     for item in memory.get('coverage', {}).get('processed_sources', [])}
+        unavailable = memory.get('coverage', {}).get('status') == 'unavailable'
+        for item in sessions:
+            if unavailable or ('one_on_one', item['id']) in processed:
+                # Uma projeção antiga não pode restaurar interpretações rejeitadas.
+                item.update(summary_ai=None, extraction=None, pontos_atencao=[],
+                            pontos_desenvolvimento=[], conquistas=[], knowledge_managed=True)
+        for item in group_context['meetings']:
+            if unavailable or ('meeting', item['id']) in processed:
+                item.update(summary_ai=None, extraction={}, transcript_excerpt='', notes='',
+                            knowledge_managed=True)
+        if 'meeting_actions' in memory:
+            group_context['actions'] = [{**item, 'meeting_id': item.get('source_record_id'),
+                                         'is_overdue': bool(item.get('due_date') and str(item['due_date']) < date.today().isoformat())}
+                                        for item in memory['meeting_actions']]
+        warning_by_task = {item['id']: item.get('support_warning', False) for item in memory.get('commitments', [])}
+        for item in commitments:
+            item['support_warning'] = warning_by_task.get(item['id'], False)
+
+    result = {
         "person": {
             "id": person_row[0],
             "full_name": person_row[1],
@@ -513,6 +589,9 @@ def _collect_prep_data(db, person_row):
         "emails": {"scanned": False, "skipped": None, "thread_count": 0,
                    "pendencias": [], "todos": [], "assuntos": []},
     }
+    if memory is not None:
+        result['knowledge'] = memory
+    return result
 
 
 def _str_list(v, limit=10):
@@ -589,7 +668,7 @@ def _collect_email_insights(db, user_id, person):
     try:
         raw = ai.extract_email_insights(name, _format_email_threads(email, threads))
     except Exception as e:
-        print(f"Prep: falha ao extrair insights de e-mail de {email}: {e}")
+        log.warning('Falha ao analisar e-mails na preparação (%s).', type(e).__name__)
         raw = {}
         empty["assuntos"] = _str_list(
             [t.get("subject") for t in threads if t.get("subject")]
@@ -641,6 +720,8 @@ def person_agenda(person_id):
         db.close()
 
     lines = [f"Pessoa: {prep['person']['full_name']}"]
+    if 'knowledge' in prep:
+        lines.append(format_context(prep['knowledge']))
     role = prep['person'].get('role_title')
     if role:
         lines.append(f"Cargo: {role}")
@@ -702,4 +783,13 @@ def person_agenda(person_id):
         lines.append(f"\nE-mails: não analisados ({em['skipped']}).")
 
     agenda_md = ai.generate_prep_agenda(prep['person']['full_name'], "\n".join(lines))
-    return jsonify({"agenda_md": agenda_md})
+    if knowledge.enabled() and prep.get('knowledge', {}).get('revision_token') is not None:
+        db = session_factory()
+        try:
+            if knowledge_revision(db) != prep['knowledge']['revision_token']:
+                return jsonify(error='A memória mudou durante a geração. Gere a pauta novamente.', conflict=True), 409
+        finally:
+            db.close()
+    return jsonify({"agenda_md": agenda_md,
+                    **({'knowledge_revision': prep['knowledge'].get('revision_token')}
+                       if 'knowledge' in prep else {})})
