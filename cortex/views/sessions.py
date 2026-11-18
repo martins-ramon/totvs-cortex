@@ -12,6 +12,7 @@ from .. import gmail as gmail_svc
 from ..security import login_required
 from .. import knowledge
 from ..knowledge_query import recover, format_context, knowledge_revision, record_task_change
+from ..knowledge_sync import source_update
 from ..meetings_context import load_meeting_context, format_meeting_context
 from ..transcripts import (load_transcript_people, normalize_transcript,
                            normalization_metadata, transcript_preview)
@@ -127,10 +128,9 @@ def create_session():
             "pubnotes": data.get('public_notes') or None,
         })
         session_id = result.fetchone()[0]
-        if knowledge.enabled():
-            knowledge.enqueue_source(db, 'one_on_one', session_id, session.get('user_id'))
+        job = knowledge.enqueue_source(db, 'one_on_one', session_id, session.get('user_id'))
         db.commit()
-        return jsonify({"success": True, "session_id": session_id}), 201
+        return jsonify({"success": True, "session_id": session_id, **source_update(job)}), 201
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     finally:
@@ -194,12 +194,11 @@ def update_session(session_id):
         result = db.execute(
             text(f"UPDATE one_on_ones SET {', '.join(updates)} WHERE id = :sid"),
             params)
-        if result.rowcount and knowledge.enabled():
-            knowledge.enqueue_source(db, 'one_on_one', session_id, session.get('user_id'))
+        job = knowledge.enqueue_source(db, 'one_on_one', session_id, session.get('user_id')) if result.rowcount else None
         db.commit()
         if result.rowcount == 0:
             return jsonify({"error": "Sessão não encontrada"}), 404
-        return jsonify({"success": True})
+        return jsonify({"success": True, **source_update(job)})
     except ValueError as e:
         db.rollback()
         return jsonify({"error": str(e)}), 400
@@ -294,7 +293,8 @@ def extract_session(session_id):
         ext = _normalize_extraction(raw)
         ext['transcript_normalization'] = normalization_metadata(normalized)
 
-        if knowledge.enabled():
+        memory_managed = knowledge.enabled()
+        if memory_managed:
             current = db.execute(text(_SESSION_SELECT + ' WHERE id = :sid FOR UPDATE'),
                                  {'sid': session_id}).fetchone()
             if current is None or tuple(current[i] for i in (1, 2, 5, 7, 8)) != tuple(row[i] for i in (1, 2, 5, 7, 8)):
@@ -314,10 +314,11 @@ def extract_session(session_id):
             "sid": session_id,
         })
 
-        if knowledge.enabled():
+        job = None
+        if memory_managed:
             # A memória reconcilia apenas compromissos aceitos com evidência.
             # IDs e alterações humanas sobrevivem à reanálise da transcrição.
-            knowledge.enqueue_source(db, 'one_on_one', session_id, session.get('user_id'))
+            job = knowledge.enqueue_source(db, 'one_on_one', session_id, session.get('user_id'))
         else:
             for c in ext["combinados"]:
                 # Desligar a memória não pode apagar IDs, prazos ou estados
@@ -344,7 +345,8 @@ def extract_session(session_id):
         result['transcript_normalization'] = {
             **normalized, 'needs_reextraction': False,
         }
-        return jsonify({"success": True, "session": result})
+        return jsonify({"success": True, "session": result, **source_update(job),
+                        **({'knowledge_managed': True} if memory_managed else {})})
     except Exception as e:
         db.rollback()
         log.warning('Falha na extração de sessão (%s).', type(e).__name__)

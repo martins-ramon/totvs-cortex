@@ -1,4 +1,4 @@
-/* Memória estruturada: grafo, evidência e curadoria sobre registros canônicos. */
+/* Memória do time: conexões, fontes e revisão de registros. */
 function cortexKnowledge() {
     return {
         knowledgeEnabled: true,
@@ -6,13 +6,19 @@ function cortexKnowledge() {
         knowledgeError: '',
         knowledgeSaving: false,
         knowledgeStatus: {},
+        knowledgeMode: 'list',
+        knowledgeRelationLimit: 3,
+        knowledgeHasLoaded: false,
+        knowledgeMapError: false,
         knowledgeFilters: { q: '', entity_id: '', classification: '', review_state: '', status: '', date_from: '', date_to: '', depth: '1' },
+        knowledgeAppliedFilters: null,
         knowledgeEntities: [],
         knowledgeEntityMatches: [],
         knowledgeEntitySearch: '',
         knowledgeEntitySearchRequest: 0,
         knowledgeNodes: [],
         knowledgeEdges: [],
+        knowledgeShared: [],
         knowledgeClaims: [],
         knowledgeTotal: 0,
         knowledgeOffset: 0,
@@ -23,6 +29,7 @@ function cortexKnowledge() {
         knowledgeDetail: null,
         knowledgeDetailLoading: false,
         knowledgeDetailError: '',
+        knowledgeEditing: false,
         knowledgeForm: {},
         knowledgeOriginal: {},
         knowledgeReason: '',
@@ -37,16 +44,8 @@ function cortexKnowledge() {
         knowledgeTaskError: '',
         knowledgeTaskRequest: 0,
         knowledgeZoom: 1,
-        knowledgeJobs: [],
-        knowledgeProcessing: false,
-        knowledgeRetryingJob: null,
-        knowledgeStopProcessing: false,
-        knowledgeShowJobs: false,
-        knowledgeBackfillPreview: null,
-        knowledgeBackfillKind: '',
-        knowledgeBackfillLimit: 10,
-        knowledgeBackfillAfter: 0,
-        knowledgeBackfillBusy: false,
+        knowledgeSyncing: false,
+        knowledgeSyncError: '',
         knowledgeNewNote: false,
         knowledgeNote: { content: '', classification: 'declaration', subject_entity_id: '', speaker_entity_id: '', entity_ids: [], reason: '' },
         knowledgeEntityForm: null,
@@ -64,8 +63,7 @@ function cortexKnowledge() {
         knowledgeLabel(value) {
             return ({ person: 'Pessoa', project: 'Projeto', topic: 'Assunto', claim: 'Afirmação', pending: 'Pendente',
                 accepted: 'Aceito', corrected: 'Corrigido', rejected: 'Rejeitado', open: 'Aberto', done: 'Concluído',
-                cancelled: 'Cancelado', none: 'Sem estado operacional', manual: 'Manual', automatic: 'Automático',
-                running: 'Processando', error: 'Falhou', superseded: 'Versão superada', queued: 'Na fila',
+                cancelled: 'Cancelado', none: 'Sem estado', manual: 'Manual', automatic: 'Automático',
                 speaker: 'Quem falou', subject: 'Sobre quem', owner: 'Responsável', mentions: 'Menciona',
                 depends_on: 'Depende de', related_to: 'Relacionado a', decided: 'Decidiu', about: 'Trata de', responsible_for: 'Responsável por' })[value]
                 || this.knowledgeClassifications.find(item => item.value === value)?.label || value || '—';
@@ -75,7 +73,35 @@ function cortexKnowledge() {
             return this.knowledgeLabel(record?.classification || record?.kind);
         },
         knowledgeEntityLabel(id) {
-            return this.knowledgeEntities.find(entity => Number(entity.id) === Number(id))?.label || (id ? `Entidade ${id}` : 'Não identificado');
+            return this.knowledgeEntities.find(entity => Number(entity.id) === Number(id))?.label
+                || this.knowledgeNodes.find(node => node.id === `entity:${id}`)?.label || 'Não identificado';
+        },
+        knowledgeClaimPeople(claim) {
+            return [
+                { label: 'Quem falou', name: claim.speaker_name },
+                { label: 'Sobre', name: claim.subject_name },
+                { label: 'Responsável', name: claim.owner_name }
+            ].filter(item => item.name);
+        },
+        knowledgeClaimTopics(claim) {
+            const roles = new Set([claim.speaker_entity_id, claim.subject_entity_id, claim.owner_entity_id].map(String));
+            const labels = (claim.entity_ids || []).filter(id => !roles.has(String(id)))
+                .map(id => this.knowledgeEntityLabel(id)).filter(label => label !== 'Não identificado');
+            return [...new Set(labels)];
+        },
+        knowledgeSourceLabel(record) {
+            if (record?.source_title) return record.source_title;
+            const kind = record?.source_kind || record?.source_ref?.split(':')[0];
+            if (kind === 'meeting') return 'Reunião';
+            if (kind === 'one_on_one') return '1:1';
+            return 'Observação';
+        },
+        knowledgeRelations() {
+            return this.knowledgeEdges.filter(edge => edge.relation_id);
+        },
+        hasKnowledgeFilters(applied = false) {
+            const filters = applied ? this.knowledgeAppliedFilters || this.knowledgeFilters : this.knowledgeFilters;
+            return Object.entries(filters).some(([key, value]) => key === 'depth' ? value !== '1' : !!value.trim());
         },
         knowledgeDisplay(value) {
             if (value == null) return '—';
@@ -89,15 +115,25 @@ function cortexKnowledge() {
         async goKnowledge(personId = null) {
             this.view = 'knowledge';
             if (personId) {
-                await this.loadKnowledgeEntities();
-                const entity = this.knowledgeEntities.find(item => Number(item.person_id) === Number(personId));
-                if (entity) this.knowledgeFilters.entity_id = String(entity.id);
+                try {
+                    const person = this.people?.find(item => Number(item.id) === Number(personId));
+                    const data = await this.api('/api/knowledge/entities?' + new URLSearchParams({ q: person?.full_name || '' }));
+                    const entity = (data.entities || []).find(item => Number(item.person_id) === Number(personId));
+                    if (entity) {
+                        this.knowledgeFilters.entity_id = String(entity.id);
+                        if (!this.knowledgeEntities.some(item => item.id === entity.id)) this.knowledgeEntities.push(entity);
+                    }
+                } catch { /* The main view handles unavailable memory. */ }
             }
-            await this.loadKnowledge();
+            await this.enterKnowledge();
         },
-        async loadKnowledgeEntities(query = '') {
-            const data = await this.api('/api/knowledge/entities?' + new URLSearchParams({ q: query, limit: '200' }));
-            this.knowledgeEntities = data.entities || [];
+        async enterKnowledge() {
+            await this.loadKnowledge();
+            if (this.knowledgeEnabled && this.knowledgeStatus.has_pending && this.knowledgeStatus.can_sync && this.view === 'knowledge') {
+                void this.syncKnowledge();
+            } else if (!this.knowledgeStatus.has_pending && !this.knowledgeStatus.needs_attention) {
+                this.knowledgeSyncError = '';
+            }
         },
         async searchKnowledgeEntities() {
             const request = ++this.knowledgeEntitySearchRequest;
@@ -115,37 +151,46 @@ function cortexKnowledge() {
         },
         knowledgeParams(offset = this.knowledgeOffset) {
             const params = new URLSearchParams({ limit: '50', offset: String(offset) });
-            Object.entries(this.knowledgeFilters).forEach(([key, value]) => { if (value) params.set(key, String(value).trim()); });
+            Object.entries(this.knowledgeAppliedFilters || this.knowledgeFilters)
+                .forEach(([key, value]) => { if (value) params.set(key, String(value).trim()); });
             return params;
         },
-        async loadKnowledge(reset = true) {
+        async loadKnowledge(reset = true, background = false) {
             const request = ++this.knowledgeRequest;
-            this.knowledgeLoading = true;
+            if (!background) this.knowledgeLoading = true;
             this.knowledgeError = '';
-            if (reset) this.knowledgeOffset = 0;
+            if (reset) {
+                this.knowledgeOffset = 0;
+                this.knowledgeRelationLimit = 3;
+                this.knowledgeAppliedFilters = { ...this.knowledgeFilters };
+            }
             try {
-                const status = await this.api('/api/knowledge/status');
-                if (request !== this.knowledgeRequest) return;
-                this.knowledgeStatus = status;
-                this.knowledgeEnabled = status.enabled !== false;
+                if (!background) {
+                    const status = await this.api('/api/knowledge/status');
+                    if (request !== this.knowledgeRequest) return;
+                    this.knowledgeStatus = status;
+                    this.knowledgeEnabled = status.enabled !== false;
+                }
                 if (!this.knowledgeEnabled) return;
                 const graphParams = this.knowledgeParams(0);
                 graphParams.set('limit', '80');
-                const results = await Promise.all([
-                    this.api('/api/knowledge/graph?' + graphParams),
-                    this.api('/api/knowledge/claims?' + this.knowledgeParams()),
-                    this.api('/api/knowledge/entities?limit=200'),
-                    this.api('/api/knowledge/jobs')
+                // The list remains usable if the map or the entity picker is temporarily unavailable.
+                const graphPromise = this.api('/api/knowledge/graph?' + graphParams).catch(() => null);
+                const entitiesPromise = this.api('/api/knowledge/entities?limit=100').catch(() => null);
+                const [claims, graph, entities] = await Promise.all([
+                    this.api('/api/knowledge/claims?' + this.knowledgeParams()), graphPromise, entitiesPromise
                 ]);
                 if (request !== this.knowledgeRequest) return;
-                const [graph, claims, entities, jobs] = results;
-                this.knowledgeNodes = graph.nodes || [];
-                this.knowledgeEdges = graph.edges || [];
-                this.knowledgeTruncated = !!graph.truncated;
+                this.knowledgeNodes = graph?.nodes || [];
+                this.knowledgeEdges = graph?.edges || [];
+                this.knowledgeTruncated = !!graph?.truncated;
+                this.knowledgeMapError = !graph;
                 this.knowledgeClaims = claims.claims || [];
                 this.knowledgeTotal = claims.total ?? this.knowledgeClaims.length;
-                this.knowledgeEntities = entities.entities || [];
-                this.knowledgeJobs = jobs.jobs || [];
+                const known = new Map(this.knowledgeEntities.map(entity => [entity.id, entity]));
+                (entities?.entities || []).forEach(entity => known.set(entity.id, entity));
+                this.knowledgeEntities = Array.from(known.values());
+                this.knowledgeHasLoaded = true;
                 this.layoutKnowledgeGraph();
             } catch (error) {
                 if (request === this.knowledgeRequest) this.knowledgeError = error.message;
@@ -157,16 +202,26 @@ function cortexKnowledge() {
             this.knowledgeOffset = Math.max(0, this.knowledgeOffset + direction * 50);
             await this.loadKnowledge(false);
         },
-        clearKnowledgeFilters() {
+        async clearKnowledgeFilters() {
             this.knowledgeFilters = { q: '', entity_id: '', classification: '', review_state: '', status: '', date_from: '', date_to: '', depth: '1' };
             this.knowledgeZoom = 1;
             this.knowledgeEntitySearch = '';
             this.knowledgeEntityMatches = [];
-            this.loadKnowledge();
+            ++this.knowledgeEntitySearchRequest;
+            await this.loadKnowledge();
+        },
+        async focusKnowledgeEntity(id) {
+            this.knowledgeFilters.entity_id = id == null ? '' : String(id);
+            this.knowledgeZoom = 1;
+            await this.loadKnowledge();
+        },
+        setKnowledgeMode(mode) {
+            this.knowledgeMode = mode;
+            if (mode === 'map') this.$nextTick(() => this.renderKnowledgeGraph());
         },
         layoutKnowledgeGraph() {
             // Positions are presentation only. No graph gesture writes semantic relations.
-            const rootId = 'entity:' + this.knowledgeFilters.entity_id;
+            const rootId = 'entity:' + (this.knowledgeAppliedFilters || this.knowledgeFilters).entity_id;
             const root = this.knowledgeNodes.find(node => String(node.id) === rootId);
             const nodes = this.knowledgeNodes.filter(node => node !== root);
             const rings = Math.max(1, Math.ceil(nodes.length / 16));
@@ -183,7 +238,25 @@ function cortexKnowledge() {
             this.knowledgeEdges = this.knowledgeEdges.map(edge => ({ ...edge,
                 start: byId[String(edge.source)], end: byId[String(edge.target)]
             })).filter(edge => edge.start && edge.end);
+            this.knowledgeShared = this.sharedKnowledgeEntities();
             this.$nextTick(() => this.renderKnowledgeGraph());
+        },
+        sharedKnowledgeEntities() {
+            const references = new Map();
+            this.knowledgeEdges.forEach(edge => {
+                const entity = edge.start;
+                const claim = edge.end;
+                if (claim.kind !== 'claim' || !/^(?:meeting|one_on_one):/.test(claim.source_ref || '')) return;
+                if (!references.has(entity.id)) references.set(entity.id, { entity, sources: new Map() });
+                references.get(entity.id).sources.set(claim.source_ref, this.knowledgeSourceLabel(claim));
+            });
+            return [...references.values()]
+                .filter(item => item.sources.size > 1)
+                .sort((a, b) => b.sources.size - a.sources.size || a.entity.label.localeCompare(b.entity.label, 'pt-BR'))
+                .slice(0, 4)
+                .map(({ entity, sources }) => ({
+                    id: entity.record_id, label: entity.label, count: sources.size, titles: [...sources.values()].slice(0, 2)
+                }));
         },
         renderKnowledgeGraph() {
             const svg = this.$refs.knowledgeGraph;
@@ -260,6 +333,8 @@ function cortexKnowledge() {
             ++this.knowledgeSelectionRequest;
             this.knowledgeRelationDetail = null;
             this.knowledgeDetailError = '';
+            this.knowledgeEntityForm = null;
+            this.knowledgeEditing = false;
             this.knowledgeSelected = { ...node };
             this.paintKnowledgeSelection();
             this.knowledgeDetail = null;
@@ -271,6 +346,7 @@ function cortexKnowledge() {
             } else {
                 const entity = this.knowledgeEntities.find(item => Number(item.id) === Number(node.record_id || String(node.id).split(':')[1]));
                 if (entity) this.knowledgeSelected = { ...node, ...entity, graph_id: node.id, id: node.id, record_id: entity.id };
+                this.$nextTick(() => this.$refs.knowledgeInspector?.focus());
             }
         },
         async selectKnowledgeClaim(id) {
@@ -280,6 +356,8 @@ function cortexKnowledge() {
             this.knowledgeEntityForm = null;
             this.knowledgeRelationForm = null;
             this.knowledgeRelationDetail = null;
+            this.knowledgeDetail = null;
+            this.knowledgeEditing = false;
             this.knowledgeSelected = { id: `claim:${id}`, kind: 'claim', record_id: Number(id) };
             this.paintKnowledgeSelection();
             try {
@@ -312,8 +390,9 @@ function cortexKnowledge() {
         },
         async expandKnowledgeEntity() {
             if (!this.knowledgeSelected || this.knowledgeSelected.kind === 'claim') return;
-            this.knowledgeFilters.entity_id = String(this.knowledgeSelected.record_id);
-            await this.loadKnowledge();
+            const id = this.knowledgeSelected.record_id;
+            this.closeKnowledgeInspector();
+            await this.focusKnowledgeEntity(id);
         },
         closeKnowledgeInspector() {
             ++this.knowledgeSelectionRequest;
@@ -325,6 +404,11 @@ function cortexKnowledge() {
             this.knowledgeRelationForm = null;
             this.knowledgeRelationDetail = null;
             this.knowledgeDetailLoading = false;
+            this.knowledgeEditing = false;
+        },
+        openKnowledgeEditor() {
+            this.knowledgeEditing = true;
+            this.$nextTick(() => (this.knowledgeRelationForm ? this.$refs.knowledgeRelationFrom : this.$refs.knowledgeClaimText)?.focus());
         },
         async saveKnowledgeClaim(reviewState = null) {
             if (!this.knowledgeDetail?.claim || this.knowledgeSaving) return;
@@ -404,8 +488,12 @@ function cortexKnowledge() {
         },
         knowledgeRefreshConsumers() {
             this.cardsLoaded = false;
-            this.prep = null;
-            this.agendaMd = null;
+            if (this.view === 'prep' && this.prepPersonId) {
+                this.loadPrep();
+            } else {
+                this.prep = null;
+                this.agendaMd = null;
+            }
             if (this.currentPerson) this.loadPersonData();
             this.loadDashboard();
         },
@@ -428,10 +516,12 @@ function cortexKnowledge() {
         },
         editKnowledgeEntity(entity = null) {
             this.knowledgeDetailError = '';
+            this.knowledgeRelationForm = null;
             this.knowledgeEntityForm = entity ? {
                 id: entity.record_id || entity.id, version: entity.version, kind: entity.kind,
                 label: entity.label, aliases: (entity.aliases || []).join('\n'), reason: ''
             } : { kind: 'topic', label: '', aliases: '', reason: '' };
+            this.$nextTick(() => this.$refs.knowledgeInspector?.focus());
         },
         async saveKnowledgeEntity() {
             if (this.knowledgeSaving || !this.knowledgeEntityForm) return;
@@ -455,7 +545,10 @@ function cortexKnowledge() {
             this.knowledgeNote = { content: '', classification: 'declaration', subject_entity_id: this.knowledgeFilters.entity_id || '', speaker_entity_id: '', entity_ids: [], reason: '' };
             this.knowledgeNewNote = true;
             this.knowledgeDetailError = '';
-            this.$nextTick(() => this.$refs.knowledgeNoteText?.focus());
+            this.$nextTick(() => {
+                if (this.$refs.knowledgeNoteOptions) this.$refs.knowledgeNoteOptions.open = false;
+                this.$refs.knowledgeNoteText?.focus();
+            });
         },
         async saveKnowledgeNote() {
             if (this.knowledgeSaving) return;
@@ -477,12 +570,14 @@ function cortexKnowledge() {
             } catch (error) { this.knowledgeDetailError = error.message; }
             finally { this.knowledgeSaving = false; }
         },
-        editKnowledgeRelation(relation = null) {
+        editKnowledgeRelation(relation = null, claimId = null) {
             this.knowledgeDetailError = '';
             if (relation?.id) return this.selectKnowledgeRelation(relation.id, relation);
+            this.knowledgeEntityForm = null;
             this.knowledgeRelationDetail = null;
             this.knowledgeRelationForm = { from_entity_id: this.knowledgeFilters.entity_id || '', to_entity_id: '',
-                relation_type: 'related_to', review_state: 'accepted', claim_id: this.knowledgeDetail?.claim?.id || null, reason: '' };
+                relation_type: 'related_to', review_state: 'accepted', claim_id: claimId, reason: '' };
+            this.$nextTick(() => this.$refs.knowledgeInspector?.focus());
         },
         async selectKnowledgeRelation(id, initial = null) {
             const request = ++this.knowledgeSelectionRequest;
@@ -491,6 +586,7 @@ function cortexKnowledge() {
             this.knowledgeEntityForm = null;
             this.knowledgeRelationDetail = null;
             this.knowledgeDetail = null;
+            this.knowledgeEditing = false;
             this.knowledgeSelected = { kind: 'relation', id: 'relation:' + id, record_id: Number(id), label: initial?.relation_type };
             this.paintKnowledgeSelection();
             const form = relation => ({ ...relation, from_entity_id: String(relation.from_entity_id),
@@ -545,64 +641,31 @@ function cortexKnowledge() {
             } catch (error) { this.knowledgeDetailError = error.message; }
             finally { this.knowledgeSaving = false; }
         },
-        async previewKnowledgeBackfill() {
-            this.knowledgeBackfillBusy = true;
-            this.knowledgeError = '';
+        async syncKnowledge(retry = false) {
+            if (this.knowledgeSyncing || !this.knowledgeEnabled || this.view !== 'knowledge') return;
+            this.knowledgeSyncing = true;
+            this.knowledgeSyncError = '';
+            let changed = false;
             try {
-                this.knowledgeBackfillPreview = await this.api('/api/knowledge/backfill', { method: 'POST', body: JSON.stringify({
-                    dry_run: true, limit: Number(this.knowledgeBackfillLimit), after_id: Number(this.knowledgeBackfillAfter), kind: this.knowledgeBackfillKind || undefined
-                }) });
-            } catch (error) { this.knowledgeError = error.message; }
-            finally { this.knowledgeBackfillBusy = false; }
-        },
-        async enqueueKnowledgeBackfill() {
-            if (!this.knowledgeBackfillPreview || this.knowledgeBackfillBusy) return;
-            this.knowledgeBackfillBusy = true;
-            this.knowledgeError = '';
-            try {
-                const data = await this.api('/api/knowledge/backfill', { method: 'POST', body: JSON.stringify({
-                    dry_run: false, limit: Number(this.knowledgeBackfillLimit), after_id: Number(this.knowledgeBackfillAfter), kind: this.knowledgeBackfillKind || undefined
-                }) });
-                if (data.next_after_id != null) this.knowledgeBackfillAfter = data.next_after_id;
-                this.knowledgeBackfillPreview = null;
-                await this.loadKnowledge(false);
-                showToast('Lote adicionado à fila. O processamento ocorre a cada solicitação.', 'success');
-            } catch (error) { this.knowledgeError = error.message; }
-            finally { this.knowledgeBackfillBusy = false; }
-        },
-        knowledgeJobCanRun(job) {
-            if ((job.attempts || 0) >= 3) return false;
-            if (['pending', 'queued', 'error'].includes(job.status)) return true;
-            return job.status === 'running' && job.lease_until && Date.parse(job.lease_until) <= Date.now();
-        },
-        knowledgeJobState(job) {
-            return job.status === 'running' && this.knowledgeJobCanRun(job) ? 'Execução interrompida · pronta para retomar' : this.knowledgeLabel(job.status);
-        },
-        async retryKnowledgeJob(job) {
-            if (this.knowledgeProcessing || this.knowledgeRetryingJob || job.status !== 'error' || (job.attempts || 0) < 3) return;
-            this.knowledgeRetryingJob = job.id;
-            this.knowledgeError = '';
-            try {
-                await this.api('/api/knowledge/jobs/' + job.id + '/retry', { method: 'POST' });
-                await this.loadKnowledge(false);
-                showToast('Tentativas reabertas. O trabalho pode ser executado novamente.', 'success');
-            } catch (error) { this.knowledgeError = error.message; }
-            finally { this.knowledgeRetryingJob = null; }
-        },
-        async runKnowledgeJobs(singleId = null) {
-            if (this.knowledgeProcessing || this.knowledgeRetryingJob) return;
-            this.knowledgeProcessing = true;
-            this.knowledgeStopProcessing = false;
-            this.knowledgeError = '';
-            const ids = singleId ? [singleId] : this.knowledgeJobs.filter(job => this.knowledgeJobCanRun(job)).slice(0, 10).map(job => job.id);
-            try {
-                for (const id of ids) {
-                    if (this.knowledgeStopProcessing) break;
-                    await this.api('/api/knowledge/jobs/' + id + '/run', { method: 'POST' });
-                    await this.loadKnowledge(false);
+                while (this.view === 'knowledge') {
+                    const result = await this.api('/api/knowledge/sync', {
+                        method: 'POST', body: JSON.stringify(retry ? { retry: true } : {})
+                    });
+                    retry = false;
+                    changed ||= !!result.updated;
+                    this.knowledgeStatus = { ...this.knowledgeStatus, ...result };
+                    if (this.view !== 'knowledge') break;
+                    if (result.updated || !result.has_pending) await this.loadKnowledge(false, true);
+                    if (!result.has_pending || !result.can_sync) break;
+                    const wait = Number(result.retry_after_ms) || (result.updated ? 250 : 1500);
+                    await new Promise(resolve => setTimeout(resolve, Math.min(30000, Math.max(200, wait))));
                 }
-            } catch (error) { this.knowledgeError = error.message; }
-            finally { this.knowledgeProcessing = false; }
+            } catch {
+                this.knowledgeSyncError = 'Não foi possível atualizar a memória agora.';
+            } finally {
+                this.knowledgeSyncing = false;
+                if (changed) this.knowledgeRefreshConsumers();
+            }
         }
     };
 }

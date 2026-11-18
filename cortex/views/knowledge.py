@@ -13,8 +13,9 @@ from sqlalchemy.exc import IntegrityError
 from ..database import session_factory
 from ..security import login_required
 from .. import knowledge as core
+from ..knowledge_sync import sync_status, sync_step
 from ..knowledge_query import (CLASSIFICATIONS, RELATIONS, REVIEWS, _claim, _COLUMNS,
-                               _JOINS, knowledge_revision, list_tasks, query_claims,
+                               _JOINS, knowledge_revision, list_tasks, query_claims, query_graph,
                                record_task_change, serial)
 
 bp = Blueprint('knowledge', __name__, url_prefix='/api/knowledge')
@@ -118,7 +119,8 @@ def filters():
 @login_required
 def status():
     if not core.enabled():
-        return jsonify({'enabled': False, 'jobs': [], 'counts': {}, 'stale': False})
+        return jsonify({'enabled': False, 'jobs': [], 'counts': {}, 'stale': False,
+                        'has_pending': False, 'needs_attention': False, 'can_sync': False})
     return _status()
 
 
@@ -132,7 +134,34 @@ def _status(db):
     pending = db.execute(text("SELECT COUNT(*) FROM knowledge_outbox WHERE status='pending'")).scalar()
     return jsonify({'enabled': True, 'counts': counts, 'jobs': jobs, 'stale': bool(pending),
                     'pending_projections': pending, 'revision_token': knowledge_revision(db),
-                    'search_mode': 'structured_text', 'semantic_available': False})
+                    'search_mode': 'structured_text', 'semantic_available': False, **sync_status(db)})
+
+
+@bp.post('/sync')
+@login_required
+def sync():
+    if not core.enabled():
+        return jsonify({'enabled': False, 'has_pending': False, 'needs_attention': False,
+                        'can_sync': False, 'updated': False})
+    try:
+        data = body() if request.get_data() else {}
+        retry = data.get('retry', False)
+        if type(retry) is not bool:
+            raise ValueError('Pedido de atualização inválido.')
+        kind, record_id = None, None
+        if 'source' in data:
+            source = data['source']
+            if not isinstance(source, dict) or source.get('kind') not in ('one_on_one', 'meeting'):
+                raise ValueError('Fonte inválida.')
+            kind = source['kind']
+            record_id = integer(source.get('id'), 'fonte')
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    try:
+        return jsonify(sync_step(session['user_id'], retry=retry, kind=kind, record_id=record_id))
+    except Exception as exc:
+        log.warning('Atualização da memória indisponível (%s).', type(exc).__name__)
+        return jsonify({'error': 'Não foi possível atualizar a memória agora. Tente novamente em instantes.'}), 503
 
 
 @bp.get('/entities')
@@ -543,91 +572,8 @@ def tasks(db):
 def graph(db):
     core.sync_people(db)
     args = filters()
-    cap = min(args.pop('limit', 80), 100)
     args.pop('offset', None)
-    depth = min(max(int(request.args.get('depth', 1)), 1), 2)
-    result = query_claims(db, **args, limit=cap)
-    records = {c['id']: c for c in result['claims']}
-    eids = set()
-    def involved(c):
-        return set(c['entity_ids'] or []) | {c[k] for k in ('speaker_entity_id', 'subject_entity_id', 'owner_entity_id') if c[k]}
-    for c in records.values():
-        eids.update(involved(c))
-    if args.get('entity_id'):
-        eids.add(args['entity_id'])
-    if depth == 2:
-        for eid in sorted(eids)[:10]:
-            more = query_claims(db, **{**args, 'entity_id': eid}, limit=min(cap, 20))
-            for c in more['claims']:
-                if len(records) >= cap:
-                    break
-                records[c['id']] = c
-                eids.update(involved(c))
-    if not eids:
-        # Real isolated entities are useful even before a first extraction.
-        q = '%' + args.get('q', '').lower()[:300] + '%'
-        eids.update(r[0] for r in db.execute(text('''SELECT id FROM knowledge_entities
-            WHERE LOWER(label) LIKE :q OR LOWER(aliases::text) LIKE :q ORDER BY id LIMIT :cap'''),
-            {'q': q, 'cap': min(20, cap)}).all())
-    # Manual relations do not require an automatic claim. Expansion includes
-    # their neighbors, while source-backed relations obey the same filters.
-    relation_rows = []
-    manual_allowed = not any(args.get(key) for key in ('classification', 'status'))
-    for _ in range(depth):
-        if not eids:
-            break
-        relation_rows = db.execute(text("""SELECT r.* FROM knowledge_relations r
-            LEFT JOIN knowledge_claims c ON c.id=r.claim_id LEFT JOIN knowledge_sources s ON s.id=c.source_id
-            WHERE r.active AND r.review_state<>'rejected'
-              AND ((:manual_allowed AND r.claim_id IS NULL
-                    AND (:review IS NULL OR r.review_state=:review)
-                    AND (:date_from IS NULL OR r.created_at::date>=CAST(:date_from AS DATE))
-                    AND (:date_to IS NULL OR r.created_at::date<=CAST(:date_to AS DATE)))
-                OR (c.active AND c.review_state<>'rejected'
-                AND (c.source_id IS NULL OR NOT s.deleted) AND c.id=ANY(CAST(:claims AS BIGINT[]))))
-              AND (r.from_entity_id=ANY(CAST(:ids AS BIGINT[])) OR r.to_entity_id=ANY(CAST(:ids AS BIGINT[])))
-            ORDER BY r.id LIMIT 200"""), {'ids': sorted(eids), 'claims': sorted(records),
-                'manual_allowed': manual_allowed, 'review': args.get('review_state'),
-                'date_from': args.get('date_from'), 'date_to': args.get('date_to')}).mappings().all()
-        for r in relation_rows:
-            eids.update((r['from_entity_id'], r['to_entity_id']))
-        if len(eids) >= cap:
-            break
-    # A hard node cap is independent from relation density / depth.
-    entity_cap = cap - min(len(records), cap // 2)
-    entity_rows = db.execute(text('''SELECT * FROM knowledge_entities WHERE id=ANY(CAST(:ids AS BIGINT[]))
-        ORDER BY CASE WHEN id=:focus THEN 0 ELSE 1 END,id LIMIT :cap'''),
-        {'ids': sorted(eids), 'focus': args.get('entity_id'), 'cap': entity_cap}).mappings().all() if eids else []
-    nodes = [{'id': f"entity:{r['id']}", 'record_id': r['id'], 'kind': r['kind'], 'label': r['label'],
-              'person_id': r['person_id'], 'version': r['version']} for r in entity_rows]
-    present = {r['id'] for r in entity_rows}
-    edges = []
-    for c in records.values():
-        if len(nodes) >= cap:
-            break
-        if involved(c) and not (involved(c) & present):
-            continue
-        nodes.append({'id': f"claim:{c['id']}", 'record_id': c['id'], 'kind': 'claim', 'label': c['content'],
-                      'classification': c['classification'], 'task_accepted': c['task_accepted'],
-                      'review_state': c['review_state'], 'status': c['status'], 'version': c['version']})
-        for role, label in (('speaker_entity_id', 'falou'), ('subject_entity_id', 'sobre'), ('owner_entity_id', 'responsável')):
-            if c[role] in present:
-                edges.append({'id': f"role:{c['id']}:{role}", 'source': f"entity:{c[role]}",
-                              'target': f"claim:{c['id']}", 'label': label, 'claim_id': c['id']})
-        roles = {c[k] for k in ('speaker_entity_id', 'subject_entity_id', 'owner_entity_id')}
-        for eid in (set(c['entity_ids']) & present) - roles:
-            edges.append({'id': f"mention:{c['id']}:{eid}", 'source': f"entity:{eid}",
-                          'target': f"claim:{c['id']}", 'label': 'menção', 'claim_id': c['id']})
-    for r in relation_rows:
-        if r['from_entity_id'] not in present or r['to_entity_id'] not in present:
-            continue
-        edges.append({'id': f"relation:{r['id']}", 'source': f"entity:{r['from_entity_id']}",
-                      'target': f"entity:{r['to_entity_id']}", 'label': r['relation_type'],
-                      'relation_id': r['id'], 'version': r['version'], 'relation': serial(r),
-                      'relation_type': r['relation_type'], 'review_state': r['review_state'],
-                      'from_entity_id': r['from_entity_id'], 'to_entity_id': r['to_entity_id'], 'claim_id': r['claim_id']})
-    return jsonify({'nodes': nodes, 'edges': edges, 'truncated': result['total'] > len(nodes) - len(present),
-                    'total': result['total'], 'depth': depth, 'revision_token': knowledge_revision(db)})
+    return jsonify(query_graph(db, **args, depth=request.args.get('depth', 1)))
 
 
 @bp.get('/jobs')

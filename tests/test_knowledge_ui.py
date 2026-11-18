@@ -7,9 +7,14 @@ import unittest
 
 @unittest.skipUnless(shutil.which('node'), 'Node não disponível para validar o cliente JavaScript')
 class KnowledgeClientTests(unittest.TestCase):
-    def test_partial_edits_conflicts_and_expired_work(self):
+    def run_javascript(self, script):
         source = pathlib.Path(__file__).resolve().parents[1] / 'static/js/knowledge.js'
-        script = r'''
+        completed = subprocess.run(['node', '-e', script, str(source)], capture_output=True,
+                                   text=True, timeout=15)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_partial_edits_and_conflicts(self):
+        self.run_javascript(r'''
 const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert/strict');
@@ -48,10 +53,6 @@ vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
     assert.equal(app.knowledgeForm.due_date, '2026-11-27');
     assert.equal(app.knowledgeDetail.claim.version, 4);
     assert.equal(app.knowledgeSaving, false);
-    assert.equal(app.knowledgeJobCanRun({ status: 'running', attempts: 1, lease_until: '2026-01-01T00:00:00Z' }), true);
-    assert.equal(app.knowledgeJobCanRun({ status: 'running', attempts: 1, lease_until: '2099-01-01T00:00:00Z' }), false);
-    assert.equal(app.knowledgeJobCanRun({ status: 'error', attempts: 3 }), false);
-    assert.equal(app.knowledgeJobCanRun({ status: 'pending', attempts: 0 }), true);
     // O detalhe da relação manual inclui auditoria sem descartar o rascunho em andamento.
     let finishRelation;
     app.api = async () => new Promise(resolve => { finishRelation = resolve; });
@@ -70,10 +71,6 @@ vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
     app.closeAssistant = () => {};
     await app.openKnowledgeFromAssistant({ id: 'relation:9', record_id: 9, type: 'relation' });
     assert.equal(selectedRelation, 9);
-    app.api = async (path, options) => { request = { path, method: options.method }; return { job_id: 8, status: 'pending' }; };
-    await app.retryKnowledgeJob({ id: 8, status: 'error', attempts: 3 });
-    assert.deepEqual(request, { path: '/api/knowledge/jobs/8/retry', method: 'POST' });
-    assert.equal(app.knowledgeRetryingJob, null);
     assert.equal(app.knowledgeClaimTypeLabel({ classification: 'commitment', task_accepted: false }), 'Compromisso · aceite a confirmar');
     assert.equal(app.knowledgeClaimTypeLabel({ classification: 'commitment', task_accepted: true }), 'Compromisso aceito');
     app.knowledgeEntities = [{ id: 11, kind: 'person', person_id: 1, label: 'Jean' }];
@@ -99,7 +96,64 @@ vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
     assert.deepEqual(request.payload.task_ref, { kind: 'commitment', id: 99, version: 3 });
     assert.equal(Object.hasOwn(request.payload, 'task_accepted'), false);
 })().catch(error => { process.stderr.write(error.stack); process.exitCode = 1; });
-'''
-        completed = subprocess.run(['node', '-e', script, str(source)], capture_output=True,
-                                   text=True, timeout=15)
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+''')
+
+    def test_automatic_sync_and_common_connections(self):
+        self.run_javascript(r'''
+const fs = require('fs');
+const vm = require('vm');
+const assert = require('assert/strict');
+const context = vm.createContext({ URLSearchParams, setTimeout: callback => callback() });
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+(async () => {
+    const app = context.cortexKnowledge();
+    app.view = 'knowledge';
+    app.$refs = {};
+    app.$nextTick = callback => callback();
+    let refreshed = 0;
+    app.knowledgeRefreshConsumers = () => { refreshed++; };
+    const entity = { id: 'entity:1', record_id: 1, kind: 'project', label: 'Atlas' };
+    const claims = [
+        { id: 'claim:2', kind: 'claim', source_ref: 'meeting:3', source_title: 'Revisão semanal' },
+        { id: 'claim:3', kind: 'claim', source_ref: 'meeting:3', source_title: 'Revisão semanal' },
+        { id: 'claim:4', kind: 'claim', source_ref: 'one_on_one:3', source_title: '1:1 com Luana' },
+        { id: 'claim:5', kind: 'claim', source_ref: 'knowledge:5', source_title: 'Observação' },
+    ];
+    const edges = claims.map(claim => ({ source: entity.id, target: claim.id }));
+    const requests = [];
+    let steps = [];
+    app.api = async (path, options) => {
+        requests.push(path);
+        if (path === '/api/knowledge/status') return { enabled: true, has_pending: true, can_sync: true };
+        if (path.startsWith('/api/knowledge/claims?')) return { claims: [{ content: 'Atlas aprovado' }] };
+        if (path.startsWith('/api/knowledge/graph?'))
+            return { nodes: [entity, ...claims], edges };
+        if (path.startsWith('/api/knowledge/entities?')) return { entities: [] };
+        if (path === '/api/knowledge/sync') {
+            assert.equal(options.method, 'POST');
+            steps.push(JSON.parse(options.body));
+            app.knowledgeFilters.q = 'busca ainda não enviada';
+            return { has_pending: steps.length === 1, can_sync: true, updated: true };
+        }
+        throw new Error('Rota inesperada: ' + path);
+    };
+    await app.enterKnowledge();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(app.knowledgeMode, 'list');
+    assert.deepEqual(steps, [{}, {}]);
+    assert.equal(app.knowledgeSyncing, false);
+    assert.equal(refreshed, 1);
+    assert.equal(app.knowledgeClaims[0].content, 'Atlas aprovado');
+    assert.deepEqual(JSON.parse(JSON.stringify(app.knowledgeShared)), [
+        { id: 1, label: 'Atlas', count: 2, titles: ['Revisão semanal', '1:1 com Luana'] }
+    ]);
+    assert.equal(requests.some(path => path.includes('/jobs') || path.includes('/backfill')), false);
+    assert.equal(requests.some(path => path.includes('q=')), false);
+
+    steps = [];
+    await app.syncKnowledge(true);
+    assert.deepEqual(steps, [{ retry: true }, {}]);
+    assert.equal(app.knowledgeSyncing, false);
+    assert.equal(refreshed, 2);
+})().catch(error => { process.stderr.write(error.stack); process.exitCode = 1; });
+''')

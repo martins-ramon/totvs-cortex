@@ -28,6 +28,26 @@ _COLUMNS = """c.*, s.kind AS source_kind, s.record_id, s.title AS source_title,
  a.due_date AS action_due_date, a.status AS action_status,
  speaker.label AS speaker_name,subject.label AS subject_name,owner.label AS owner_name,
  speaker.person_id AS speaker_person_id,subject.person_id AS subject_person_id,owner.person_id AS owner_person_id"""
+_CLAIM_ORDER = ' ORDER BY c.occurred_on DESC NULLS LAST,c.id DESC'
+_ROLES = (('speaker_entity_id', 'falou'), ('subject_entity_id', 'sobre'), ('owner_entity_id', 'responsável'))
+
+
+def _mentions_entity(expression):
+    return f"""({expression} IN (c.speaker_entity_id,c.subject_entity_id,c.owner_entity_id)
+        OR c.entity_ids @> jsonb_build_array({expression})
+        OR EXISTS (SELECT 1 FROM knowledge_relations linked WHERE linked.claim_id=c.id
+          AND linked.active AND linked.review_state<>'rejected'
+          AND {expression} IN (linked.from_entity_id,linked.to_entity_id)))"""
+
+
+def _search_pattern(value):
+    literal = str(value).lower()[:300].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    return f'%{literal}%'
+
+
+def _person_entity(db, person_id):
+    return db.execute(text('SELECT id FROM knowledge_entities WHERE person_id=:pid'),
+                      {'pid': person_id}).scalar()
 
 
 def serial(row):
@@ -67,28 +87,20 @@ def _claim(row):
     return result
 
 
-def query_claims(db, *, entity_id=None, person_id=None, q='', classification=None,
-                 review_state=None, status=None, date_from=None, date_to=None,
-                 limit=80, offset=0, include_rejected=False):
+def _claim_filters(*, entity_ids=(), q='', classification=None, review_state=None, status=None,
+                   date_from=None, date_to=None, include_rejected=False):
     clauses = ["c.active AND (c.source_id IS NULL OR NOT s.deleted)"
                if include_rejected else _ACTIVE]
-    params = {'limit': max(1, min(int(limit), 200)), 'offset': max(0, int(offset))}
-    if person_id is not None:
-        entity_id = db.execute(text("SELECT id FROM knowledge_entities WHERE person_id=:pid"),
-                               {'pid': person_id}).scalar()
-        if entity_id is None:
-            return {'claims': [], 'total': 0, 'offset': params['offset'], 'next_offset': None}
-    if entity_id is not None:
-        params['eid'] = int(entity_id)
-        clauses.append("""(c.speaker_entity_id=:eid OR c.subject_entity_id=:eid
-             OR c.owner_entity_id=:eid OR c.entity_ids @> CAST(:entities AS JSONB))""")
-        params['entities'] = json.dumps([int(entity_id)])
+    params = {}
+    if entity_ids:
+        clauses.append('EXISTS (SELECT 1 FROM unnest(CAST(:entity_ids AS BIGINT[])) scope(id) WHERE '
+                       + _mentions_entity('scope.id') + ')')
+        params['entity_ids'] = list(entity_ids)
     if q:
-        params.update(q=str(q)[:300], like='%' + str(q).lower()[:300] + '%')
-        clauses.append("""(to_tsvector('portuguese',c.content) @@ plainto_tsquery('portuguese',:q)
-            OR LOWER(c.content) LIKE :like OR EXISTS (SELECT 1 FROM knowledge_entities e
-              WHERE (e.id=c.speaker_entity_id OR e.id=c.subject_entity_id OR e.id=c.owner_entity_id
-                     OR c.entity_ids @> jsonb_build_array(e.id))
+        params.update(q=str(q)[:300], like=_search_pattern(q))
+        clauses.append(f"""(to_tsvector('portuguese',c.content) @@ plainto_tsquery('portuguese',:q)
+            OR LOWER(c.content) LIKE :like OR LOWER(s.title) LIKE :like
+            OR EXISTS (SELECT 1 FROM knowledge_entities e WHERE {_mentions_entity('e.id')}
                 AND (LOWER(e.label) LIKE :like OR LOWER(e.aliases::text) LIKE :like)))""")
     for key, value, allowed, sql in (
         ('classification', classification, CLASSIFICATIONS, 'c.classification=:classification'),
@@ -106,12 +118,164 @@ def query_claims(db, *, entity_id=None, person_id=None, q='', classification=Non
             clauses.append(f'c.occurred_on {op} :{key}')
     if params.get('date_from') and params.get('date_to') and params['date_from'] > params['date_to']:
         raise ValueError('Período inválido.')
-    where = ' WHERE ' + ' AND '.join(clauses)
+    return ' AND '.join(clauses), params
+
+
+def _matching_claims(db, filters, params, limit, offset=0):
+    rows = db.execute(text('SELECT ' + _COLUMNS + ' ' + _JOINS + ' WHERE ' + filters + _CLAIM_ORDER +
+                           ' LIMIT :limit OFFSET :offset'), {**params, 'limit': limit, 'offset': offset}).mappings()
+    return [_claim(row) for row in rows]
+
+
+def query_claims(db, *, entity_id=None, person_id=None, limit=80, offset=0, **filters):
+    limit, offset = max(1, min(int(limit), 200)), max(0, int(offset))
+    if person_id is not None:
+        entity_id = _person_entity(db, person_id)
+        if entity_id is None:
+            return {'claims': [], 'total': 0, 'offset': offset, 'next_offset': None}
+    filtered, params = _claim_filters(entity_ids=[int(entity_id)] if entity_id is not None else [], **filters)
+    where = ' WHERE ' + filtered
     total = db.execute(text('SELECT COUNT(*) ' + _JOINS + where), params).scalar()
-    rows = db.execute(text('SELECT ' + _COLUMNS + ' ' + _JOINS + where +
-                          ' ORDER BY c.occurred_on DESC NULLS LAST,c.id DESC LIMIT :limit OFFSET :offset'), params).mappings().all()
-    return {'claims': [_claim(row) for row in rows], 'total': total, 'offset': params['offset'],
-            'next_offset': params['offset'] + len(rows) if params['offset'] + len(rows) < total else None}
+    claims = _matching_claims(db, filtered, params, limit, offset)
+    return {'claims': claims, 'total': total, 'offset': offset,
+            'next_offset': offset + len(claims) if offset + len(claims) < total else None}
+
+
+def _matching_relations(db, claim_filter, params, scope, filters, limit):
+    where_manual = ['r.claim_id IS NULL']
+    if filters.get('classification') or filters.get('status'):
+        where_manual.append('FALSE')
+    if scope:
+        where_manual.append("""(r.from_entity_id=ANY(CAST(:entity_ids AS BIGINT[]))
+            OR r.to_entity_id=ANY(CAST(:entity_ids AS BIGINT[])))""")
+    if filters.get('q'):
+        where_manual.append("""(LOWER(from_entity.label) LIKE :like OR LOWER(to_entity.label) LIKE :like
+            OR LOWER(from_entity.aliases::text) LIKE :like OR LOWER(to_entity.aliases::text) LIKE :like)""")
+    if filters.get('review_state'):
+        where_manual.append('r.review_state=:review_state')
+    for key, op in (('date_from', '>='), ('date_to', '<=')):
+        if params.get(key):
+            where_manual.append(f'r.created_at::date {op} :{key}')
+
+    return db.execute(text(f"""SELECT r.*, s.kind AS source_kind, s.record_id AS source_record_id,
+        s.title AS source_title, c.occurred_on, c.classification
+        FROM knowledge_relations r
+        JOIN knowledge_entities from_entity ON from_entity.id=r.from_entity_id
+        JOIN knowledge_entities to_entity ON to_entity.id=r.to_entity_id
+        LEFT JOIN knowledge_claims c ON c.id=r.claim_id
+        LEFT JOIN knowledge_sources s ON s.id=c.source_id
+        LEFT JOIN commitments t ON t.id=c.commitment_id
+        LEFT JOIN meeting_actions a ON a.id=c.meeting_action_id
+        WHERE r.active AND r.review_state<>'rejected'
+          AND ((c.id IS NOT NULL AND c.review_state<>'rejected' AND {claim_filter})
+               OR ({' AND '.join(where_manual)}))
+        ORDER BY COALESCE(c.occurred_on,r.created_at::date) DESC, r.id DESC
+        LIMIT :relation_limit"""), {**params, 'relation_limit': limit}).mappings().all()
+
+
+def _claim_entity_ids(claim):
+    roles = [claim[key] for key, _ in _ROLES if claim[key]]
+    return list(dict.fromkeys(roles + claim['entity_ids']))
+
+
+def query_graph(db, *, entity_id=None, person_id=None, depth=1, limit=80, **filters):
+    cap = max(1, min(int(limit), 100))
+    depth = max(1, min(int(depth), 2))
+    focus = _person_entity(db, person_id) if person_id is not None else entity_id
+    if person_id is not None and focus is None:
+        return {'nodes': [], 'edges': [], 'truncated': False, 'total': 0, 'depth': depth,
+                'revision_token': knowledge_revision(db)}
+    scope = [focus] if focus is not None else []
+    filtered, params = _claim_filters(entity_ids=scope, **filters)
+    total = db.execute(text('SELECT COUNT(*) ' + _JOINS + ' WHERE ' + filtered), params).scalar()
+    claims = _matching_claims(db, filtered, params, cap)
+    # Relations are selected independently from the claim page. A recent page
+    # of unrelated observations must not hide a matching, older connection.
+    relation_limit = cap * 2
+    relations = _matching_relations(db, filtered, params, scope, filters, relation_limit + 1)
+    if depth == 2 and scope:
+        neighbors = list(dict.fromkeys(
+            [eid for row in relations for eid in (row['from_entity_id'], row['to_entity_id'])] +
+            [eid for claim in claims for eid in _claim_entity_ids(claim)]))
+        neighbors = [eid for eid in neighbors if eid != focus][:10]
+        if neighbors:
+            more_filter, more_params = _claim_filters(entity_ids=neighbors, **filters)
+            more_relations = _matching_relations(db, more_filter, more_params, neighbors, filters, relation_limit + 1)
+            known_relations = {row['id'] for row in relations}
+            relations += [row for row in more_relations if row['id'] not in known_relations]
+            if len(claims) < cap:
+                more_claims = _matching_claims(db, more_filter, more_params, cap)
+                known_claims = {claim['id'] for claim in claims}
+                claims += [claim for claim in more_claims if claim['id'] not in known_claims]
+
+    # Admit both ends of a relationship together before filling remaining
+    # positions with observations and their named entities.
+    entity_ids = dict.fromkeys(scope)
+    edges = []
+    for row in relations[:relation_limit]:
+        endpoints = {row['from_entity_id']: None, row['to_entity_id']: None}
+        if len(entity_ids.keys() | endpoints.keys()) > cap:
+            continue
+        entity_ids.update(endpoints)
+        reference = (f"{row['source_kind']}:{row['source_record_id']}" if row['source_kind']
+                     else f"knowledge:{row['claim_id']}" if row['claim_id'] else None)
+        relation = serial({key: value for key, value in row.items() if key not in
+                           {'source_kind', 'source_record_id', 'source_title', 'occurred_on', 'classification'}})
+        edges.append({'id': f"relation:{row['id']}", 'source': f"entity:{row['from_entity_id']}",
+                      'target': f"entity:{row['to_entity_id']}", 'label': row['relation_type'],
+                      'relation_id': row['id'], 'version': row['version'], 'relation': relation,
+                      'relation_type': row['relation_type'], 'review_state': row['review_state'],
+                      'from_entity_id': row['from_entity_id'], 'to_entity_id': row['to_entity_id'],
+                      'claim_id': row['claim_id'], 'source_ref': reference, 'source_title': row['source_title'],
+                      'occurred_on': str(row['occurred_on']) if row['occurred_on'] else None,
+                      'classification': row['classification']})
+    relation_count = len(edges)
+    claim_nodes = []
+    remaining_claims = len(claims)
+    for claim in claims:
+        space = cap - len(entity_ids) - len(claim_nodes)
+        if space <= 0:
+            break
+        claim_id = claim['id']
+        graph_id = f'claim:{claim_id}'
+        claim_nodes.append({'id': graph_id, 'record_id': claim_id, 'kind': 'claim', 'label': claim['content'],
+                            **{key: claim[key] for key in ('classification', 'task_accepted', 'review_state',
+                               'status', 'version', 'source_ref', 'source_title', 'occurred_on')}})
+        remaining_claims -= 1
+        involved = _claim_entity_ids(claim)
+        for eid in involved:
+            if eid not in entity_ids and space > 1:
+                entity_ids[eid] = None
+                space -= 1
+        roles = {claim[key] for key, _ in _ROLES}
+        for role, label in _ROLES:
+            if claim[role] in entity_ids:
+                edges.append({'id': f'role:{claim_id}:{role}', 'source': f'entity:{claim[role]}',
+                              'target': graph_id, 'label': label, 'claim_id': claim_id})
+        for eid in involved:
+            if eid in entity_ids and eid not in roles:
+                edges.append({'id': f'mention:{claim_id}:{eid}', 'source': f'entity:{eid}',
+                              'target': graph_id, 'label': 'menção', 'claim_id': claim_id})
+
+    if entity_ids:
+        entities = db.execute(text('SELECT * FROM knowledge_entities WHERE id=ANY(CAST(:ids AS BIGINT[]))'),
+                              {'ids': list(entity_ids)}).mappings()
+        by_id = {row['id']: row for row in entities}
+        entity_rows = [by_id[eid] for eid in entity_ids if eid in by_id]
+    elif not claim_nodes and not any(filters.get(key) for key in ('classification', 'review_state', 'status',
+                                                                   'date_from', 'date_to')):
+        entity_rows = db.execute(text('''SELECT * FROM knowledge_entities
+            WHERE LOWER(label) LIKE :q OR LOWER(aliases::text) LIKE :q ORDER BY id LIMIT :cap'''),
+            {'q': _search_pattern(filters.get('q', '')), 'cap': min(20, cap)}).mappings().all()
+    else:
+        entity_rows = []
+    nodes = [{'id': f"entity:{row['id']}", 'record_id': row['id'], 'kind': row['kind'], 'label': row['label'],
+              'person_id': row['person_id'], 'version': row['version']} for row in entity_rows]
+    present = {node['id'] for node in nodes + claim_nodes}
+    truncated = bool(remaining_claims or total > cap or len(relations) > relation_count)
+    return {'nodes': nodes + claim_nodes, 'edges': [edge for edge in edges
+            if edge['source'] in present and edge['target'] in present], 'truncated': truncated,
+            'total': total, 'depth': depth, 'revision_token': knowledge_revision(db)}
 
 
 def list_tasks(db, *, person_id=None, status='open', limit=100, offset=0):
@@ -162,8 +326,10 @@ def recover(db, person_id=None, q='', as_of=None, limit=80, offset=0):
         if page['next_offset'] is None:
             break
         cursor = page['next_offset']
-    pending = [serial(r) for r in db.execute(text("""SELECT id,source_id,version_id,status,attempts,error
-        FROM knowledge_jobs WHERE status IN ('pending','running','error') ORDER BY id LIMIT 100""")).mappings().all()]
+    pending = [serial(r) for r in db.execute(text("""SELECT j.id,j.source_id,j.version_id,j.status,j.attempts,j.error
+        FROM knowledge_jobs j JOIN knowledge_sources s ON s.id=j.source_id
+        WHERE NOT s.deleted AND j.version_id=s.current_version_id
+          AND j.status IN ('pending','running','error') ORDER BY j.id LIMIT 100""")).mappings().all()]
     relationships = [serial(r) for r in db.execute(text("""SELECT r.*,e1.label AS from_label,e2.label AS to_label
         FROM knowledge_relations r
         JOIN knowledge_entities e1 ON e1.id=r.from_entity_id JOIN knowledge_entities e2 ON e2.id=r.to_entity_id
@@ -171,9 +337,11 @@ def recover(db, person_id=None, q='', as_of=None, limit=80, offset=0):
         LEFT JOIN knowledge_sources s ON s.id=c.source_id
         WHERE r.active AND r.review_state<>'rejected'
           AND (r.claim_id IS NULL OR (""" + _ACTIVE + """))
-          AND (:pid IS NULL OR r.from_entity_id IN (SELECT id FROM knowledge_entities WHERE person_id=:pid)
-               OR r.to_entity_id IN (SELECT id FROM knowledge_entities WHERE person_id=:pid))
-        ORDER BY r.id LIMIT 100"""), {'pid': person_id}).mappings().all()]
+          AND (:pid IS NULL OR EXISTS (SELECT 1 FROM knowledge_entities e WHERE e.person_id=:pid
+               AND (e.id IN (r.from_entity_id,r.to_entity_id) OR """ + _mentions_entity('e.id') + """)))
+          AND (:as_of IS NULL OR COALESCE(c.occurred_on,r.created_at::date)<=CAST(:as_of AS DATE))
+        ORDER BY COALESCE(c.occurred_on,r.created_at::date) DESC,r.id DESC LIMIT 100"""),
+        {'pid': person_id, 'as_of': as_of}).mappings().all()]
     last_conversation = db.execute(text('''SELECT MAX(occurred_on) FROM one_on_ones
         WHERE (:pid IS NULL OR person_id=:pid) AND (:as_of IS NULL OR occurred_on<=CAST(:as_of AS DATE))'''),
         {'pid': person_id, 'as_of': as_of}).scalar()
@@ -299,9 +467,6 @@ def memory_source_context(db):
                 'title': 'Observação manual', 'excerpt': format_context({'claims': [claim]}),
                 'record_id': claim['id'], 'date': claim['occurred_on'], 'person_id': None,
                 'participant_ids': person_ids})
-    for item in mapping.values():
-        if item['claims']:
-            item['text'] = format_context({'claims': item['claims']})
     relations = db.execute(text("""SELECT r.*,s.kind AS source_kind,s.record_id AS source_record_id,
         e1.label AS from_label,e2.label AS to_label,e1.person_id AS from_person_id,e2.person_id AS to_person_id
         FROM knowledge_relations r

@@ -21,6 +21,13 @@ from .ai.knowledge_service import (CLASSIFICATIONS, RELATIONS, REVIEWS, extract_
 log = logging.getLogger('cortex.knowledge')
 SOURCE_TABLES = {'one_on_one': 'one_on_ones', 'meeting': 'meetings'}
 TASK_TABLES = {'commitment': 'commitments', 'meeting_action': 'meeting_actions'}
+EXTRACTION_REVISION = '2'
+# Conjunto de str.isspace(), compartilhado com a descoberta no Postgres.
+SOURCE_WHITESPACE = (
+    '\t\n\v\f\r\x1c\x1d\x1e\x1f \x85\xa0\u1680'
+    '\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a'
+    '\u2028\u2029\u202f\u205f\u3000'
+)
 
 
 def enabled():
@@ -51,15 +58,16 @@ def sync_people(db):
     """Uma entidade por ID de people, independentemente de homônimos."""
     people = db.execute(text('''SELECT id,full_name,preferred_name,transcript_aliases FROM people ORDER BY id''')).mappings().all()
     for person in people:
-        aliases = [person.get('preferred_name'), *(person.get('transcript_aliases') or []), person['full_name'].split()[0]]
+        aliases = [person.get('preferred_name'), *(person.get('transcript_aliases') or []),
+                   *person['full_name'].split()[:1]]
         aliases = list(dict.fromkeys(a for a in aliases if isinstance(a, str) and a.strip()))
+        values = {'key': f"person:{person['id']}", 'label': person['full_name'],
+                  'pid': person['id'], 'aliases': _json(aliases)}
         db.execute(text('''INSERT INTO knowledge_entities (entity_key,kind,label,person_id,aliases)
-            VALUES (:key,'person',:label,:pid,CAST(:aliases AS JSONB))
-            ON CONFLICT (entity_key) DO UPDATE SET label=EXCLUDED.label,
-            aliases=EXCLUDED.aliases,version=knowledge_entities.version+1,updated_at=CURRENT_TIMESTAMP
-            WHERE knowledge_entities.label IS DISTINCT FROM EXCLUDED.label
-               OR knowledge_entities.aliases IS DISTINCT FROM EXCLUDED.aliases'''),
-            {'key': f"person:{person['id']}", 'label': person['full_name'], 'pid': person['id'], 'aliases': _json(aliases)})
+            VALUES (:key,'person',:label,:pid,CAST(:aliases AS JSONB)) ON CONFLICT DO NOTHING'''), values)
+        db.execute(text('''UPDATE knowledge_entities SET label=:label,aliases=CAST(:aliases AS JSONB),
+            version=version+1,updated_at=CURRENT_TIMESTAMP WHERE person_id=:pid
+              AND (label IS DISTINCT FROM :label OR aliases IS DISTINCT FROM CAST(:aliases AS JSONB))'''), values)
     return [dict(r) for r in db.execute(text('SELECT * FROM knowledge_entities ORDER BY id')).mappings().all()]
 
 
@@ -102,6 +110,11 @@ def enqueue_source(db, kind, record_id, user_id=None):
     if record is None:
         raise ValueError('Fonte não encontrada.')
     source_text = _source_text(kind, record)
+    if not source_text.strip(SOURCE_WHITESPACE):
+        if not db.execute(text('SELECT id FROM knowledge_sources WHERE kind=:kind AND record_id=:id'),
+                          {'kind': kind, 'id': record_id}).scalar():
+            return None
+        source_text = ''
     fingerprint = hashlib.sha256(_json({'text': source_text, 'occurred_on': record['occurred_on']}).encode()).hexdigest()
     db.execute(text('''INSERT INTO knowledge_sources (kind,record_id,title)
         VALUES (:kind,:id,:title) ON CONFLICT(kind,record_id) DO NOTHING'''),
@@ -129,7 +142,12 @@ def enqueue_source(db, kind, record_id, user_id=None):
         status=CASE WHEN :changed THEN 'pending' ELSE knowledge_jobs.status END,
         cursor_json=CASE WHEN :changed THEN '{}'::jsonb ELSE knowledge_jobs.cursor_json END,
         staged_json=CASE WHEN :changed THEN '[]'::jsonb ELSE knowledge_jobs.staged_json END,
-        attempts=CASE WHEN :changed THEN 0 ELSE knowledge_jobs.attempts END
+        attempts=CASE WHEN :changed THEN 0 ELSE knowledge_jobs.attempts END,
+        metrics_json=CASE WHEN :changed THEN '{}'::jsonb ELSE knowledge_jobs.metrics_json END,
+        lease_token=CASE WHEN :changed THEN NULL ELSE knowledge_jobs.lease_token END,
+        lease_until=CASE WHEN :changed THEN NULL ELSE knowledge_jobs.lease_until END,
+        error=CASE WHEN :changed THEN NULL ELSE knowledge_jobs.error END,
+        updated_at=CASE WHEN :changed THEN CURRENT_TIMESTAMP ELSE knowledge_jobs.updated_at END
         RETURNING id,status'''), {'sid': source['id'], 'vid': version_id, 'changed': changed}).mappings().first()
     return dict(job)
 
@@ -439,12 +457,18 @@ def process_job(job_id, user_id=None):
     token = uuid.uuid4().hex
     db = session_factory()
     try:
-        job = db.execute(text('''SELECT j.*,s.current_version_id,s.deleted FROM knowledge_jobs j
-            JOIN knowledge_sources s ON s.id=j.source_id WHERE j.id=:id FOR UPDATE OF j,s'''), {'id': job_id}).mappings().first()
+        # Edição, remoção e publicação travam a fonte antes do job.
+        source = db.execute(text('''SELECT current_version_id,deleted FROM knowledge_sources
+            WHERE id=(SELECT source_id FROM knowledge_jobs WHERE id=:id) FOR UPDATE'''),
+            {'id': job_id}).mappings().first()
+        job = db.execute(text('SELECT * FROM knowledge_jobs WHERE id=:id FOR UPDATE'),
+                         {'id': job_id}).mappings().first()
         if not job:
             raise ValueError('Processamento não encontrado.')
-        if job['deleted'] or job['current_version_id'] != job['version_id']:
-            db.execute(text("UPDATE knowledge_jobs SET status='superseded' WHERE id=:id"), {'id': job_id}); db.commit()
+        if not source or source['deleted'] or source['current_version_id'] != job['version_id']:
+            db.execute(text("""UPDATE knowledge_jobs SET status='superseded',lease_token=NULL,lease_until=NULL
+                WHERE id=:id"""), {'id': job_id})
+            db.commit()
             return {'job_id': job_id, 'status': 'superseded'}
         if job['status'] == 'done':
             return {'job_id': job_id, 'status': 'done', 'metrics': job['metrics_json']}
@@ -452,24 +476,32 @@ def process_job(job_id, user_id=None):
         if job['status'] == 'running' and job.get('lease_until') and job['lease_until'] > now:
             return {'job_id': job_id, 'status': 'running'}
         if job['attempts'] >= 3:
-            return {'job_id': job_id, 'status': 'error', 'error': 'Limite de tentativas atingido; revise a fonte e tente novamente.'}
+            error = 'Limite de tentativas atingido. Tente novamente mais tarde.'
+            if job['status'] != 'error':
+                db.execute(text("""UPDATE knowledge_jobs SET status='error',lease_token=NULL,lease_until=NULL,
+                    error=:error,updated_at=CURRENT_TIMESTAMP WHERE id=:id"""), {'id': job_id, 'error': error})
+                db.commit()
+            return {'job_id': job_id, 'status': 'error', 'error': error}
         version = dict(db.execute(text('SELECT * FROM knowledge_versions WHERE id=:id'), {'id': job['version_id']}).mappings().first())
         parts = list(segments(version['source_text']))
         cursor = (job['cursor_json'] or {}).get('segment', 0)
-        entities, tasks = sync_people(db), _tasks(db)
-        from .knowledge_query import _COLUMNS, _JOINS, _ACTIVE, _claim
-        existing_claims = [_claim(r) for r in db.execute(text(
-            'SELECT ' + _COLUMNS + ' ' + _JOINS + " WHERE (c.active OR (c.review_state='rejected' AND c.human_fields<>'{}'::jsonb))"
-            + " AND (c.source_id IS NULL OR NOT s.deleted) ORDER BY c.id")).mappings().all()]
+        has_content = cursor < len(parts) and bool(parts[cursor]['text'].strip(SOURCE_WHITESPACE))
+        if has_content:
+            entities, tasks = sync_people(db), _tasks(db)
+            from .knowledge_query import _COLUMNS, _JOINS, _claim
+            existing_claims = [_claim(r) for r in db.execute(text(
+                'SELECT ' + _COLUMNS + ' ' + _JOINS + " WHERE (c.active OR (c.review_state='rejected' AND c.human_fields<>'{}'::jsonb))"
+                + " AND (c.source_id IS NULL OR NOT s.deleted) ORDER BY c.id")).mappings().all()]
         db.execute(text("""UPDATE knowledge_jobs SET status='running',lease_token=:token,
             lease_until=CURRENT_TIMESTAMP+INTERVAL '90 seconds',attempts=attempts+1,
-            updated_at=CURRENT_TIMESTAMP WHERE id=:id"""), {'id': job_id, 'token': token})
+            metrics_json=metrics_json || CAST(:revision AS JSONB),updated_at=CURRENT_TIMESTAMP WHERE id=:id"""),
+            {'id': job_id, 'token': token, 'revision': _json({'extraction_revision': EXTRACTION_REVISION})})
         db.commit()
     finally:
         db.close()
     started = time.monotonic()
     try:
-        if cursor < len(parts):
+        if has_content:
             candidates, metrics = extract_candidates(parts[cursor], entities, tasks, version['occurred_on'], version['timezone'], existing_claims)
         else:
             candidates, metrics = [], {'prompt_tokens': 0, 'completion_tokens': 0}
@@ -479,10 +511,12 @@ def process_job(job_id, user_id=None):
         log.warning('Extração de memória falhou (%s).', type(exc).__name__)
         db = session_factory()
         try:
-            db.execute(text("""UPDATE knowledge_jobs SET status='error',lease_token=NULL,lease_until=NULL,
+            updated = db.execute(text("""UPDATE knowledge_jobs SET status='error',lease_token=NULL,lease_until=NULL,
                 error='Falha na extração ou validação; a fonte foi preservada.',updated_at=CURRENT_TIMESTAMP
                 WHERE id=:id AND lease_token=:token"""), {'id': job_id, 'token': token})
             db.commit()
+            if not updated.rowcount:
+                return {'job_id': job_id, 'status': 'superseded'}
         finally:
             db.close()
         return {'job_id': job_id, 'status': 'error', 'error': 'Falha na extração ou validação; a fonte foi preservada.'}
@@ -496,7 +530,9 @@ def process_job(job_id, user_id=None):
         if len(staged) > 1200:
             raise ValueError('Fonte excedeu o limite de afirmações por processamento.')
         previous_metrics = job['metrics_json'] or {}
-        combined = {key: (previous_metrics.get(key, 0) + metrics.get(key, 0)) for key in ('prompt_tokens', 'completion_tokens', 'latency_ms')}
+        combined = {key: previous_metrics.get(key, 0) + metrics.get(key, 0)
+                    for key in ('prompt_tokens', 'completion_tokens', 'latency_ms', 'rejected_candidates')}
+        combined['extraction_revision'] = EXTRACTION_REVISION
         combined['model'] = metrics.get('model', previous_metrics.get('model'))
         combined['context_truncated'] = bool(previous_metrics.get('context_truncated') or metrics.get('context_truncated') or metrics.get('claims_context_truncated'))
         combined['context_chars_max'] = max(previous_metrics.get('context_chars_max', 0), metrics.get('context_chars', 0))
@@ -519,10 +555,13 @@ def process_job(job_id, user_id=None):
     except Exception as exc:
         db.rollback()
         log.warning('Publicação de memória falhou (%s).', type(exc).__name__)
-        db.execute(text("""UPDATE knowledge_jobs SET status='error',lease_token=NULL,lease_until=NULL,
-            error='Falha ao publicar; nenhuma alteração parcial foi aplicada.' WHERE id=:id AND lease_token=:token"""),
+        updated = db.execute(text("""UPDATE knowledge_jobs SET status='error',lease_token=NULL,lease_until=NULL,
+            error='Falha ao publicar; nenhuma alteração parcial foi aplicada.',updated_at=CURRENT_TIMESTAMP
+            WHERE id=:id AND lease_token=:token"""),
             {'id': job_id, 'token': token})
         db.commit()
+        if not updated.rowcount:
+            return {'job_id': job_id, 'status': 'superseded'}
         return {'job_id': job_id, 'status': 'error', 'error': 'Falha ao publicar; nenhuma alteração parcial foi aplicada.'}
     finally:
         db.close()

@@ -3,6 +3,7 @@
 // Instâncias do Chart.js ficam fora do componente para não serem
 // "proxificadas" pela reatividade do Alpine (quebra o canvas).
 let _dashCharts = {};
+const _knowledgeSourceSyncs = new Set();
 
 function cortexApp() {
     return {
@@ -124,7 +125,7 @@ function cortexApp() {
             this.loadRecentSessions();
             this.loadDashboard();
             if (this.view === 'connections') this.loadConnections();
-            if (this.view === 'knowledge') this.loadKnowledge();
+            if (this.view === 'knowledge') this.enterKnowledge();
             this.booted = true;
         },
 
@@ -143,6 +144,32 @@ function cortexApp() {
                 throw err;
             }
             return data;
+        },
+
+        async syncKnowledgeSource(kind, id) {
+            const key = kind + ':' + id;
+            if (!id || _knowledgeSourceSyncs.has(key)) return;
+            _knowledgeSourceSyncs.add(key);
+            let updated = false;
+            try {
+                while (true) {
+                    const state = await this.api('/api/knowledge/sync', {
+                        method: 'POST',
+                        body: JSON.stringify({ source: { kind, id: Number(id) } })
+                    });
+                    updated ||= state.updated;
+                    if (!state.can_sync || !state.has_pending) break;
+                    if (state.retry_after_ms) await new Promise(resolve => setTimeout(resolve, state.retry_after_ms));
+                }
+            } catch (error) {
+                // O trabalho é retomado ao abrir a memória.
+            } finally {
+                _knowledgeSourceSyncs.delete(key);
+                if (updated) {
+                    this.knowledgeRefreshConsumers();
+                    if (this.view === 'knowledge') void this.loadKnowledge(false, true);
+                }
+            }
         },
 
         logout() {
@@ -732,22 +759,24 @@ function cortexApp() {
             if (!f.person_id) { showToast('Selecione a pessoa.', 'warning'); return; }
             if (!f.occurred_on) { showToast('Informe a data.', 'warning'); return; }
             this.savingSession = true;
-            let sessionId;
             try {
+                let data;
+                let sessionId;
                 if (this.editingSessionId) {
-                    await this.api('/api/oneonones/' + this.editingSessionId, {
+                    data = await this.api('/api/oneonones/' + this.editingSessionId, {
                         method: 'PUT', body: JSON.stringify(f)
                     });
                     sessionId = this.editingSessionId;
                     showToast('1:1 atualizado!', 'success');
                 } else {
-                    const d = await this.api('/api/oneonones', {
+                    data = await this.api('/api/oneonones', {
                         method: 'POST', body: JSON.stringify(f)
                     });
-                    sessionId = d.session_id;
+                    sessionId = data.session_id;
                     showToast('1:1 registrado!', 'success');
                 }
                 this.showSessionModal = false;
+                if (data.knowledge_pending) void this.syncKnowledgeSource('one_on_one', sessionId);
                 await this.loadRecentSessions();
                 if (this.currentPerson && String(this.currentPerson.id) === String(f.person_id)) {
                     await this.loadPersonData();
@@ -767,7 +796,7 @@ function cortexApp() {
                         if (detailOpen) await this.viewSession(sessionId);
                         const n = (d.session.extraction && d.session.extraction.combinados)
                             ? d.session.extraction.combinados.length : 0;
-                        showToast(`Insights extraídos${n ? ` — ${n} combinado(s) criado(s)` : ''}!`, 'success');
+                        showToast(`Insights extraídos${n && !d.knowledge_managed ? ` — ${n} combinado(s) criado(s)` : ''}!`, 'success');
                         await this.loadRecentSessions();
                         if (this.currentPerson && String(this.currentPerson.id) === String(f.person_id)) {
                             await this.loadPersonData();
@@ -805,8 +834,9 @@ function cortexApp() {
             try {
                 const d = await this.api(`/api/oneonones/${this.sessionDetail.id}/extract`, { method: 'POST' });
                 this.sessionDetail = d.session;
+                if (d.knowledge_pending) void this.syncKnowledgeSource('one_on_one', d.session.id);
                 const n = (d.session.extraction && d.session.extraction.combinados ? d.session.extraction.combinados.length : 0);
-                showToast(`Insights extraídos! ${n} combinado(s) criado(s).`, 'success');
+                showToast(d.knowledge_managed ? 'Insights extraídos!' : `Insights extraídos! ${n} combinado(s) criado(s).`, 'success');
                 await this.loadRecentSessions();
                 if (this.currentPerson) await this.loadPersonData();
                 if (this.prepPersonId) this.loadPrep();

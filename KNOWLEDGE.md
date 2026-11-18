@@ -92,10 +92,20 @@ existirem, aplique `scripts/migrate_forum_meetings.sql` antes deste script.
 
 Configure `KNOWLEDGE_ENABLED=1` e, para diretor único,
 `KNOWLEDGE_OWNER_USER_ID`. A flag é lida em runtime; o padrão é desligado.
-`OPENAI_API_KEY` é a configuração de IA já existente. A tela Memória oferece
-progresso e execução explícita dos jobs pendentes; cada requisição conclui ou
-registra seu passo antes de responder. Reabrir a tela ou usar o CLI retoma jobs.
-Não há processamento automático ilimitado ou serviço externo obrigatório.
+`OPENAI_API_KEY` habilita a extração. Ao salvar uma transcrição ou notas no
+Cortex, o navegador inicia a atualização dessa conversa. Ao abrir **Memória**,
+o Cortex retoma o que ficou pendente e inclui transcrições e notas do histórico.
+A atualização avança enquanto o navegador estiver aberto e pode continuar na
+próxima visita à Memória. Cada requisição faz no máximo uma chamada de IA e
+registra o progresso no banco antes de responder.
+
+A lista mostra conexões e registros com suas fontes. Abra um deles para
+conferir o trecho original. Use a busca para acompanhar uma pessoa, um projeto
+ou um assunto em várias conversas. O mapa oferece outra visualização dos
+mesmos registros. Se alguma conversa continuar pendente após uma falha,
+**Atualizar memória** retoma a atualização.
+
+O CLI segue disponível para manutenção com limites explícitos por execução.
 
 O backfill é somente simulação por padrão. Não registra textos nos logs:
 
@@ -127,13 +137,15 @@ Falhas de IA ficam registradas para retry limitado. Um lease impede publicação
 concorrente; execução expirada pode ser retomada. Uma versão ultrapassada ou
 uma fonte removida não pode voltar a publicar. Alterações humanas são protegidas
 por campo; novas evidências incompatíveis ficam como conflito para revisão.
-Cada segmento permite três tentativas. Após corrigir a configuração ou a fonte,
-“Reabrir tentativas” reinicia explicitamente esse limite, com auditoria e sem
-descartar os segmentos já confirmados. A extração limita registro/tarefas a
-40 mil caracteres, afirmações anteriores a 20 mil e transcrição a segmentos
-de 10 mil; métricas identificam qualquer recorte. Identidades ambíguas continuam
-pendentes, mesmo quando o contexto é reduzido. Conflitos são propostas de
-revisão, não decisões automáticas sobre qual fala é verdadeira.
+Cada segmento permite três tentativas. **Atualizar memória** reabre tentativas
+esgotadas e preserva os segmentos já confirmados. Versões da extração anterior
+que falharam ou terminaram sem registros são retomadas uma vez pelo extrator
+atual. O servidor encontra a posição de citações literais únicas e mantém os
+registros válidos quando outra interpretação do mesmo segmento falha.
+A extração destina até 40 mil caracteres a entidades e tarefas, até 20 mil
+a afirmações anteriores e divide a transcrição em segmentos de até 10 mil
+caracteres. Identidades ambíguas continuam pendentes. Conflitos ficam
+disponíveis para revisão.
 
 ## Consumo e propagação
 
@@ -241,27 +253,6 @@ pautas, autorização/RLS, exclusão, retomada e ZIP com links verificáveis. As
 respostas de IA são simuladas e passam pelo validador real. A verificação HTTP
 local confirma páginas e APIs; ela não substitui a inspeção da renderização.
 
-Limites deliberados: não há embeddings pré-existentes; a busca informa modo
-estruturado/textual, sem disponibilidade semântica. Não há mescla automática de
-identidades, organização/tenant inventado, integração Obsidian em tempo real,
-worker em segundo plano ou serviço pago adicional.
-
-## Verificações desta implementação
-
-- Suíte completa: **288 testes aprovados**, incluindo **22 cenários com Postgres
-  16 local real**, com fixtures fictícias e IA simulada. Sem testes pulados nessa
-  execução; sem credenciais ou chamadas ao provedor real.
-- DDL aplicado e reaplicado em bancos descartáveis locais; testes de RLS,
-  funções internas, concorrência, exclusão e projeções incluídos.
-- `compileall`, `git diff --check`, sintaxe dos quatro JavaScripts alterados e
-  `scripts/build_static.py` aprovados. O build gera `public/static`, ignorado no Git.
-- Aplicação iniciada localmente: páginas e APIs de memória/exportação respondem
-  corretamente. `/healthz` informa banco `ok` e HTTP 503 por falta de configurações
-  reais de OpenAI/Google, como esperado neste ambiente.
-- O teste do cliente com Node verifica curadoria, conflito, paginação, seleção
-  de tarefas e retomada de jobs. A renderização visual não foi inspecionada:
-  o host do conector de navegador estava indisponível.
-
-Não houve deploy, migração remota ou processamento de histórico de produção.
-Ainda é necessário configurar o ambiente real, aplicar o DDL pelo processo
-autorizado, ativar a flag e validar uma extração com o provedor configurado.
+A busca usa texto e vínculos registrados no Postgres. A aplicação mantém
+separadas as identidades ambíguas e usa a versão vigente de cada fonte. A
+atualização depende das requisições do navegador ou do CLI.

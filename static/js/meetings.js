@@ -136,6 +136,7 @@ function cortexMeetings() {
                 this.showMeetingForm = false;
                 const id = editingId || data.meeting_id || data.meeting?.id;
                 showToast(editingId ? 'Reunião atualizada.' : 'Reunião registrada.', 'success');
+                if (data.knowledge_pending) void this.syncKnowledgeSource('meeting', id);
                 await this.viewMeeting(id);
                 this.refreshMeetingViews();
             } catch (error) {
@@ -190,6 +191,7 @@ function cortexMeetings() {
             try {
                 const data = await this.api(`/api/meetings/${this.meetingDetail.id}/extract`, { method: 'POST' });
                 this.setMeetingDetail(data.meeting);
+                if (data.knowledge_pending) void this.syncKnowledgeSource('meeting', data.meeting.id);
                 showToast('Análise concluída. Revise as ações sugeridas antes de incluí-las no plano.', 'success');
                 this.refreshMeetingViews();
             } catch (error) {

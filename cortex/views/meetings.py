@@ -14,6 +14,7 @@ from ..meetings_context import iso, load_participants, serialize_action
 from ..security import login_required
 from .. import knowledge
 from ..knowledge_query import record_task_change
+from ..knowledge_sync import source_update
 from ..transcripts import load_transcript_people
 
 bp = Blueprint('meetings', __name__, url_prefix='/api')
@@ -219,10 +220,10 @@ def create_meeting():
         keys = list(values)
         mid = db.execute(text(f"INSERT INTO meetings ({', '.join(keys)}) VALUES ({', '.join(':' + k for k in keys)}) RETURNING id"), values).fetchone()[0]
         _replace_participants(db, mid, ids)
-        if knowledge.enabled():
-            knowledge.enqueue_source(db, 'meeting', mid, session.get('user_id'))
+        job = knowledge.enqueue_source(db, 'meeting', mid, session.get('user_id'))
         db.commit()
-        return jsonify({'success': True, 'meeting_id': mid, 'auto_added_participants': added}), 201
+        return jsonify({'success': True, 'meeting_id': mid, 'auto_added_participants': added,
+                        **source_update(job)}), 201
     except ValueError as exc:
         db.rollback()
         return jsonify({'error': str(exc)}), 400
@@ -268,10 +269,9 @@ def update_meeting(mid):
         _replace_participants(db, mid, ids)
         sets = [f'{key} = :{key}' for key in values] + ['updated_at = CURRENT_TIMESTAMP']
         db.execute(text(f"UPDATE meetings SET {', '.join(sets)} WHERE id = :mid"), {**values, 'mid': mid})
-        if knowledge.enabled():
-            knowledge.enqueue_source(db, 'meeting', mid, session.get('user_id'))
+        job = knowledge.enqueue_source(db, 'meeting', mid, session.get('user_id'))
         db.commit()
-        return jsonify({'success': True, 'auto_added_participants': added})
+        return jsonify({'success': True, 'auto_added_participants': added, **source_update(job)})
     except ValueError as exc:
         db.rollback()
         return jsonify({'error': str(exc)}), 400
@@ -342,10 +342,9 @@ def extract_meeting(mid):
                    {'mid': mid, 'summary': extraction['summary'],
                     'topics': json.dumps(extraction['topics'], ensure_ascii=False),
                     'extraction': json.dumps(extraction, ensure_ascii=False)})
-        if knowledge.enabled():
-            knowledge.enqueue_source(db, 'meeting', mid, session.get('user_id'))
+        job = knowledge.enqueue_source(db, 'meeting', mid, session.get('user_id'))
         db.commit()
-        return jsonify({'success': True, 'meeting': _load(db, mid)})
+        return jsonify({'success': True, 'meeting': _load(db, mid), **source_update(job)})
     except Exception as exc:
         return _error(db, exc)
     finally:

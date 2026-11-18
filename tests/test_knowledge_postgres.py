@@ -13,7 +13,8 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import PurePosixPath
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from urllib.parse import unquote
 
 from sqlalchemy import create_engine, text
@@ -22,6 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from werkzeug.security import generate_password_hash
 
 from cortex import create_app, database, knowledge
+from cortex.ai import knowledge_service
 from cortex.ai.knowledge_service import validate_candidates
 from cortex.knowledge_query import context_snapshot, memory_source_context, recover
 
@@ -105,6 +107,122 @@ class KnowledgePostgresTests(unittest.TestCase):
                 'subject': {'kind': 'person', 'name': subject} if subject else None,
                 'owner': {'kind': 'person', 'name': owner} if owner else None,
                 'due_expression': due, 'accepted': classification == 'commitment', **extra}
+
+    def test_sync_discovers_history_and_updates_a_new_transcript_independently(self):
+        old_quote = 'Marina Costa: O Projeto Aurora depende do Projeto Atlas.'
+        new_quote = 'Jean Silva: O Projeto Atlas já está em operação.'
+        with patch.dict(os.environ, {'KNOWLEDGE_ENABLED': '0'}):
+            old_id = self.source(old_quote, kind='meeting')
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'ficticio'}):
+            create = self.client.post('/api/oneonones', json={'person_id': 1, 'occurred_on': '2026-11-14',
+                'title': 'Acompanhamento Atlas', 'transcript_raw': new_quote})
+            self.assertIs(create.json['knowledge_pending'], True)
+            sid = create.json['session_id']
+            self.assertTrue(self.client.get('/api/knowledge/status').json['has_pending'])
+            atlas = {'kind': 'project', 'label': 'Projeto Atlas'}
+            aurora = {'kind': 'project', 'label': 'Projeto Aurora'}
+
+            def completion(**request):
+                quote = json.loads(request['messages'][-1]['content'])['transcript_segment']
+                if quote == old_quote:
+                    item = self.item(quote, classification='report', speaker='Marina Costa',
+                                     content='O Aurora depende do Atlas.', subject=None, owner=None, due=None,
+                                     relations=[{'from': aurora, 'to': atlas, 'type': 'depends_on'}])
+                else:
+                    self.assertEqual(quote, new_quote)
+                    item = self.item(quote, classification='report', content='Atlas está em operação.',
+                                     owner=None, due=None, mentions=[atlas])
+                item['quote_start'] = 900
+                choice = SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+                    content=json.dumps({'claims': [item]})))
+                return SimpleNamespace(choices=[choice], usage=None)
+
+            extractor = Mock(side_effect=completion)
+            ai_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=extractor)))
+            with patch.object(knowledge_service, 'get_client', return_value=ai_client):
+                target = self.client.post('/api/knowledge/sync', json={'source': {'kind': 'one_on_one', 'id': sid}})
+                self.assertEqual(target.status_code, 200, target.json)
+                self.assertTrue(target.json['updated'])
+                self.assertFalse(target.json['has_pending'])
+                self.assertTrue(self.client.get('/api/knowledge/status').json['has_pending'])
+                history = self.client.post('/api/knowledge/sync', json={})
+                self.assertEqual(history.status_code, 200, history.json)
+                self.assertTrue(history.json['updated'])
+                self.assertFalse(history.json['has_pending'])
+                self.assertFalse(self.client.post('/api/knowledge/sync', json={}).json['updated'])
+                self.assertEqual(extractor.call_count, 2)
+        graph = self.client.get('/api/knowledge/graph').json
+        edge = next(edge for edge in graph['edges'] if edge.get('relation_type') == 'depends_on')
+        detail = self.client.get(f"/api/knowledge/relations/{edge['relation_id']}").json
+        self.assertEqual(detail['evidence']['record_id'], old_id)
+        self.assertEqual(detail['evidence']['text'], old_quote)
+
+    def test_sync_revisits_a_legacy_empty_result_once_and_limits_retries(self):
+        sid = self.source('Jean Silva: O plano segue em revisão.')
+        jid = self.process(sid, [])
+        self.sql("UPDATE knowledge_jobs SET metrics_json='{}'::jsonb WHERE id=:id", {'id': jid})
+        with patch.dict(os.environ, {'OPENAI_API_KEY': ''}), \
+                patch.object(knowledge, 'extract_candidates') as extractor:
+            status = self.client.get('/api/knowledge/status').json
+            self.assertTrue(status['has_pending'])
+            self.assertTrue(status['needs_attention'])
+            self.assertFalse(status['can_sync'])
+            self.client.post('/api/knowledge/sync', json={})
+            extractor.assert_not_called()
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'ficticio'}):
+            with patch.object(knowledge, 'extract_candidates', side_effect=ValueError('simulado')) as extractor:
+                for _ in range(3):
+                    result = self.client.post('/api/knowledge/sync', json={})
+                    self.assertEqual(result.status_code, 200, result.json)
+                self.assertFalse(result.json['has_pending'])
+                self.assertTrue(result.json['needs_attention'])
+                self.client.post('/api/knowledge/sync', json={})
+                self.assertEqual(extractor.call_count, 3)
+            with patch.object(knowledge, 'extract_candidates', return_value=([], {})) as extractor:
+                result = self.client.post('/api/knowledge/sync', json={'retry': True})
+                self.assertTrue(result.json['updated'])
+                self.assertFalse(result.json['has_pending'])
+                self.assertFalse(result.json['needs_attention'])
+                self.client.post('/api/knowledge/sync', json={})
+                extractor.assert_called_once()
+        self.assertEqual(self.sql('SELECT id,status FROM knowledge_jobs'), [{'id': jid, 'status': 'done'}])
+
+    def test_sync_ignores_blank_history_and_detects_when_existing_content_is_cleared(self):
+        with patch.dict(os.environ, {'KNOWLEDGE_ENABLED': '0'}):
+            self.source('\xa0\n\u2003')
+        self.assertFalse(self.client.get('/api/knowledge/status').json['has_pending'])
+        self.assertEqual(self.sql('SELECT id FROM knowledge_jobs'), [])
+
+        quote = 'Jean Silva: O plano segue em revisão.'
+        sid = self.source(quote)
+        self.process(sid, [self.item(quote, classification='report', owner=None, due=None)])
+        with patch.dict(os.environ, {'KNOWLEDGE_ENABLED': '0'}):
+            edited = self.client.put(f'/api/oneonones/{sid}', json={'transcript_raw': '\xa0\n\u2003'})
+            self.assertEqual(edited.status_code, 200, edited.json)
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'ficticio'}), \
+                patch.object(knowledge, 'extract_candidates') as extractor:
+            self.assertTrue(self.client.get('/api/knowledge/status').json['has_pending'])
+            result = self.client.post('/api/knowledge/sync', json={})
+            self.assertTrue(result.json['updated'])
+            self.assertFalse(result.json['has_pending'])
+            extractor.assert_not_called()
+        self.assertEqual(self.client.get('/api/knowledge/claims').json['claims'], [])
+
+    def test_parallel_first_graph_and_entity_requests_share_one_person_identity(self):
+        paths = ['/api/knowledge/entities', '/api/knowledge/graph'] * 3
+        barrier = threading.Barrier(len(paths))
+
+        def load(path):
+            client = self.app.test_client()
+            with client.session_transaction() as session:
+                session['user_id'] = 1
+            barrier.wait(timeout=5)
+            return client.get(path).status_code
+
+        with ThreadPoolExecutor(max_workers=len(paths)) as executor:
+            self.assertEqual(list(executor.map(load, paths)), [200] * len(paths))
+        self.assertEqual(self.sql("SELECT person_id FROM knowledge_entities WHERE kind='person' ORDER BY person_id"),
+                         [{'person_id': 1}, {'person_id': 2}])
 
     def scenario(self):
         q10 = 'Jean Silva: Aceito entregar a proposta em 20/11.'
@@ -204,6 +322,7 @@ class KnowledgePostgresTests(unittest.TestCase):
         for method, path in [('get','/api/knowledge/entities'), ('get','/api/knowledge/graph'),
             ('get','/api/knowledge/claims/1'), ('put','/api/knowledge/claims/1'),
             ('get','/api/knowledge/export'), ('post','/api/knowledge/jobs/1/run'),
+            ('post','/api/knowledge/sync'),
             ('get',f'/api/oneonones/{sid}'), ('get','/api/people/1/prep'),
             ('post','/api/people/1/agenda'), ('get','/api/cards/latest'), ('post','/api/assistant/chat')]:
             with self.subTest(path=path):
@@ -211,6 +330,7 @@ class KnowledgePostgresTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             session.clear()
         self.assertEqual(self.client.get('/api/knowledge/export').status_code, 401)
+        self.assertEqual(self.client.post('/api/knowledge/sync', json={}).status_code, 401)
         # RLS is effective even with SELECT granted to an unprivileged local role.
         with self.engine.begin() as conn:
             conn.execute(text("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='cortex_memory_reader') THEN CREATE ROLE cortex_memory_reader; END IF; END $$"))
@@ -426,6 +546,57 @@ class KnowledgePostgresTests(unittest.TestCase):
                                  for r in memory_source_context(db)['manual_records']))
         finally:
             db.close()
+
+    def test_graph_keeps_older_grounded_connection_with_both_endpoints(self):
+        quote = 'Marina Costa: Dependo da proposta de Jean Silva.'
+        mid = self.source(quote, '2026-11-10', 'meeting')
+        self.process(mid, [self.item(quote, content='A entrega depende da proposta.',
+            classification='report', speaker='Marina Costa', subject=None, owner=None, due=None,
+            relations=[{'from': {'name': 'Marina Costa'}, 'to': {'name': 'Jean Silva'},
+                        'type': 'depends_on'}])], 'meeting')
+        relation = self.sql('SELECT * FROM knowledge_relations')[0]
+        # Previously published claims may name connection endpoints only in
+        # the relation itself, outside of their speaker, subject and mentions.
+        self.sql("""UPDATE knowledge_claims SET speaker_entity_id=NULL,entity_ids='[]'::jsonb
+            WHERE id=:id""", {'id': relation['claim_id']})
+        self.sql("""INSERT INTO knowledge_claims (content,classification,origin,occurred_on)
+            VALUES ('Observação recente A','declaration','manual','2026-11-11'),
+                   ('Observação recente B','declaration','manual','2026-11-12')""")
+        response = self.client.get('/api/knowledge/graph?limit=2')
+        self.assertEqual(response.status_code, 200, response.json)
+        edge = response.json['edges'][0]
+        self.assertEqual(set(n['id'] for n in response.json['nodes']), {edge['source'], edge['target']})
+        self.assertEqual(edge['relation_id'], relation['id'])
+        self.assertEqual(edge['source_ref'], f'meeting:{mid}')
+        self.assertEqual(edge['source_title'], 'Fórum fictício')
+        self.assertEqual(edge['occurred_on'], '2026-11-10')
+        self.assertTrue(response.json['truncated'])
+        for args in ('person_id=1', 'q=Jean', 'q=Fórum'):
+            with self.subTest(args=args):
+                graph = self.client.get('/api/knowledge/graph?' + args).json
+                self.assertEqual(graph['edges'][0]['relation_id'], relation['id'])
+                self.assertIn('claim:' + str(relation['claim_id']), [n['id'] for n in graph['nodes']])
+        self.assertEqual(self.client.get('/api/knowledge/claims?person_id=1').json['total'], 1)
+        self.assertEqual(self.client.get('/api/knowledge/graph?date_from=2026-11-11').json['edges'], [])
+        with self.factory() as db:
+            self.assertEqual(recover(db, person_id=1, as_of='2026-11-09')['relations'], [])
+            known = recover(db, person_id=1, as_of='2026-11-10')['relations']
+            self.assertEqual([edge['id'] for edge in known], [relation['id']])
+
+    def test_graph_finds_manual_connections_beyond_the_first_entities(self):
+        self.sql("""INSERT INTO knowledge_entities(entity_key,kind,label)
+            SELECT 'topic:assunto-' || n,'topic','Assunto ' || n FROM generate_series(1,30) AS n""")
+        left, right = [self.client.post('/api/knowledge/entities', json={'kind': 'project', 'label': label})
+                       .json['entity'] for label in ('Projeto A', 'Projeto B')]
+        result = self.client.post('/api/knowledge/relations', json={
+            'from_entity_id': left['id'], 'to_entity_id': right['id'], 'relation_type': 'related_to',
+            'reason': 'Vínculo confirmado pelo diretor.'})
+        self.assertEqual(result.status_code, 201, result.json)
+        for args in ('limit=2', 'q=Projeto+B', f"entity_id={left['id']}"):
+            with self.subTest(args=args):
+                graph = self.client.get('/api/knowledge/graph?' + args).json
+                self.assertEqual([e['relation_id'] for e in graph['edges']], [result.json['relation']['id']])
+        self.assertEqual(self.client.get('/api/knowledge/graph?classification=decision').json['edges'], [])
 
     def test_corrected_and_rejected_relation_identity_survives_replay(self):
         quote = 'Marina Costa: Dependo da proposta de Jean Silva.'
